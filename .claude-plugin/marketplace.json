@@ -1,0 +1,15 @@
+{
+  "name": "chord-page",
+  "description": "The chord-page skill for Claude Code: karaoke chord pages from a song's recording and lyrics.",
+  "owner": {
+    "name": "Alex (@codercorgi)",
+    "url": "https://x.com/codercorgi"
+  },
+  "plugins": [
+    {
+      "name": "chord-page",
+      "source": "./",
+      "description": "Make a karaoke chord page from a song's mp3 and lyrics: chords over every line, play-along backing, and a word-by-word highlighter wipe."
+    }
+  ]
+}

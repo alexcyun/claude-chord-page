@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- Karaoke chords for "{{TITLE}}", made by the chord-page skill (chordpage.py --standalone) from the recording.
+     Data in karaoke-{{SLUG}}.js and bars-{{SLUG}}.js, logic in karaoke.js, styles in chordpage.css. Serve this folder
+     with a server that does byte ranges (npx serve), or the Recording backing can't seek -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{{TITLE}}, Karaoke Chords</title>
+<meta name="description" content="Chords over every line of {{ARTIST}}’s “{{TITLE}}”, for karaoke or guitar: {{KEY_NAME}}, {{TEMPO_SHORT}}, with transpose, capo, chord diagrams and a play-along player.">
+<meta property="og:title" content="{{TITLE}}, Karaoke Chords">
+<meta property="og:description" content="Chords over every line of {{ARTIST}}’s “{{TITLE}}”, with a karaoke player, transpose, capo and chord diagrams.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#0b0b0d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0b0d'/%3E%3Cpath d='M6 24 A10 10 0 0 1 26 24' fill='none' stroke='%23ffe14d' stroke-width='3'/%3E%3Cpath d='M16 24 L23 13' stroke='%23ff6b9c' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="chordpage.css">
+</head>
+<body class="chordpage">
+
+<header class="hero">
+  <div class="wrap">
+    <div class="htop">
+      <div class="htitle">
+        <div class="eyebrow">KARAOKE CHORDS <small>every line · play along</small></div>
+        <h1>{{TITLE}} <small class="h1sub">chords</small></h1>
+      </div>
+      <div class="hside">
+        <p class="dek">Chords over every line of {{ARTIST}}’s song, ready for karaoke night or a guitar. Press Play to sing along: the words fill in as they’re sung.</p>
+      </div>
+    </div>
+    <div class="credits">
+      <div><b>Key</b>{{KEY_NAME}}</div>
+      <div><b>Tempo</b>{{TEMPO}}</div>
+      <div><b>Song</b>{{ARTIST}}{{RELEASED}}</div>
+      <div><b>Chords</b>Worked out from the recording, not an official chart</div>
+    </div>
+  </div>
+</header>
+
+<div class="chordbar" id="chordbar"><div class="wrap">
+  <div class="cgrp live"><span>Listen</span><button class="minibtn" id="play" aria-pressed="false">▶ Play</button><button class="minibtn loopbtn" id="loop" aria-pressed="false" aria-label="Loop the song" title="Loop the song"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 12V9a3 3 0 0 1 3-3h13m-3-3 3 3-3 3"/><path d="M20 12v3a3 3 0 0 1-3 3H4m3 3-3-3 3-3"/></svg></button><span class="seg" role="group" aria-label="Backing"><button class="minibtn" id="bSynth" aria-pressed="true">Synth</button><button class="minibtn" id="bSong" aria-pressed="false">Recording</button></span></div>
+  <div class="cgrp live"><span>Mix</span><label class="mixl">Band <input id="vBand" type="range" min="0" max="100" step="1" value="100"></label><label class="mixl">Vocals <input id="vVox" type="range" min="0" max="100" step="1" value="0"></label></div>
+  <div class="cgrp"><span>Transpose</span><button class="minibtn" id="tDown" aria-label="Transpose down a semitone">−</button><output id="tVal" aria-live="polite">0</output><button class="minibtn" id="tUp" aria-label="Transpose up a semitone">+</button></div>
+  <div class="cgrp"><span>Easy shapes</span><button class="minibtn" id="capo" aria-pressed="false">Capo</button></div>
+  <div class="cgrp"><span>Size</span><button class="minibtn" id="fDown" aria-label="Smaller text">A−</button><button class="minibtn" id="fUp" aria-label="Larger text">A+</button></div>
+  <div class="cgrp"><span>Scroll</span><button class="minibtn" id="scroll" aria-pressed="false">▶ Auto-scroll</button><input id="speed" type="range" min="1" max="10" value="3" aria-label="Scroll speed"></div>
+  <div class="cgrp"><button class="minibtn" id="diag" aria-pressed="true">Chord diagrams</button></div>
+</div></div>
+
+<main class="wrap chordmain">
+  <p class="chordnote" id="keyNote"></p>
+  <div class="diagrams" id="diagrams" aria-label="Chord diagrams"></div>
+  <div class="sheet" id="sheet"></div>
+  <p class="chordnote">{{METHOD}}</p>
+</main>
+
+<footer>
+  <div class="wrap">Not affiliated with {{ARTIST}}. The song, its recording and its lyrics belong to their creator{{PERMISSION}}.</div>
+</footer>
+
+<script src="bars-{{SLUG}}.js"></script>
+<script src="karaoke-{{SLUG}}.js"></script>
+<script src="karaoke.js"></script>
+</body>
+</html>
