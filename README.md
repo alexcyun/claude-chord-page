@@ -2,7 +2,7 @@
 
 A Claude Code skill that turns a song's recording and lyrics into a karaoke chord page: chords over every lyric line,
 Ultimate Guitar style, with a player you can sing or play along with. See it on a real song:
-https://pdoom.codercorgi.com/end-of-the-show-chords
+https://music.codercorgi.com/end-of-the-show-chords
 
 ## What it makes
 
@@ -107,5 +107,5 @@ theme tokens at the top), `standalone.html` (the page) and `scripts/chordpage.py
 function, described at the top of the file). A new chord type goes in `QUAL` in the script and in `QUAL` and `SHAPES`
 in `karaoke.js`.
 
-The skill comes from the [P(doom) songs site](https://pdoom.codercorgi.com), where `template.html` and the default
+The skill comes from the [P(doom) songs site](https://music.codercorgi.com), where `template.html` and the default
 (non-standalone) mode build pages into that site; you can ignore both.

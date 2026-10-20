@@ -5,7 +5,7 @@ description: Make a karaoke chord page for a song (chords over every lyric line,
 
 # Chord page
 
-Turns a recording plus its lyrics into a page like https://pdoom.codercorgi.com/end-of-the-show-chords. It works in two
+Turns a recording plus its lyrics into a page like https://music.codercorgi.com/end-of-the-show-chords. It works in two
 places:
 
 - **Anywhere** (`--standalone DIR`): a self-contained folder (`index.html`, `karaoke.js`, `chordpage.css`, the song's
