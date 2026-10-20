@@ -19,11 +19,15 @@ out/my-song/
   media/my-song-vocals.mp3         the vocals on their own
 ```
 
-The page has chords over every line, transpose, a capo view in open shapes, text size, auto-scroll and chord diagrams.
+The page has chords over every line, transpose, a capo view in open shapes, text size, auto-scroll and chord diagrams:
+a row at the top, and a popup when you hover a chord (or tap one on a phone while nothing is playing). A **Fingering**
+switch picks the shapes, in any key: **Beginner** (the chord's notes on the top three or four strings, no big barre),
+**Standard** (the usual song-book shape) or **Advanced** (a full barre up the neck).
 **Play** runs a backing on the song's own timing, after a count-in: **Synth** (a small Web Audio keyboard and bass, in
 whatever key you transpose to) or **Recording** (the instrumental). A **Vocals** slider blends in the original singer.
-While it plays, the line being sung lights up and fills in word by word, and tapping a line jumps there. **Loop**
-repeats the song.
+While it plays, the line being sung lights up and fills in word by word. Pressing Play again **pauses**, and
+**Resume** picks up from the same spot. Tap any line to play from there. **Loop** repeats the song. Loop starts on and
+Vocals at 0.8, so the first Play sounds like the record; the page remembers your choices.
 
 How it gets there (`skills/chord-page/scripts/chordpage.py`):
 
@@ -73,23 +77,27 @@ uv venv ~/.cache/chordpage/venv -p 3.12
 VIRTUAL_ENV=~/.cache/chordpage/venv uv pip install "demucs==4.0.1" "numpy<2" "librosa<0.12" "numba<0.62" soundfile yt-dlp
 ```
 
-demucs pulls in torch (about 1 GB) and takes a few minutes per song on a laptop CPU. Keep demucs at 4.0.1: 4.1 needs
+For `--yt`, also install deno (`brew install deno`): yt-dlp uses it for YouTube and warns that working without a
+JavaScript runtime is deprecated. demucs pulls in torch (about 1 GB) and takes a few minutes per song on a laptop CPU. Keep demucs at 4.0.1: 4.1 needs
 `sphn`, which has no wheel for some Macs and fails to build. Keep numpy below 2: on Macs where torch stops at 2.2, demucs fails with "Numpy is not available". For `--whisper`, also `uv pip install faster-whisper`.
 
 ## Run it yourself
 
 The lyrics file has the sung lines in order, repeats written out, one per row, with `[Verse 1]`, `[Chorus]` and so on
-starting sections. Take the words from the artist or the video's on-screen lyrics, not auto-captions.
+starting sections. Take the words from the artist or the video's on-screen lyrics, not auto-captions. The path below is
+from a clone of this repo; an installed plugin's copy is under `~/.claude/plugins/cache/chord-page/`.
 
 ```bash
 ~/.cache/chordpage/venv/bin/python skills/chord-page/scripts/chordpage.py song.mp3 \
   --slug my-song --title "My Song" --artist "The Artist" --lyrics lyrics.txt \
-  --yt YOUTUBE_VIDEO_ID --standalone out/my-song
+  --yt YOUTUBE_VIDEO_ID --out out/my-song
 ```
 
-Options: `--whisper` instead of `--yt`; `--key Gm` and `--capo 3` to override what it picks; `--released "Oct 2, 2026"`
+Options: `--own` when the song is yours (the footer credits you instead of disclaiming the artist); `--whisper`
+instead of `--yt`; `--key Gm` and `--capo 3` to override what it picks; `--released "Oct 2, 2026"`
 for the credits; `--no-media` to leave the audio out; `--stems DIR` to reuse a demucs output. Each stage caches in
-`~/.cache/chordpage/<slug>/`: delete `bars.json` there to redo the chords, `asr.json` to redo the words.
+`~/.cache/chordpage/<slug>/`: delete `bars.json` there to redo the chords, `asr.json` to redo the words. Use a new
+folder per song (it refuses one that holds another song).
 
 ## Serve it
 
@@ -103,9 +111,10 @@ backing and Vocals can't jump to a line. Any static host works for sharing it (V
 ## Extend it
 
 Everything is plain files: `assets/karaoke.js` (the player, chord shapes and synth), `assets/chordpage.css` (the look;
-theme tokens at the top), `standalone.html` (the page) and `scripts/chordpage.py` (the pipeline; each stage is a
+theme tokens at the top), `template.html` (the page) and `scripts/chordpage.py` (the pipeline; each stage is a
 function, described at the top of the file). A new chord type goes in `QUAL` in the script and in `QUAL` and `SHAPES`
 in `karaoke.js`.
 
-The skill comes from the [P(doom) songs site](https://music.codercorgi.com), where `template.html` and the default
-(non-standalone) mode build pages into that site; you can ignore both.
+The skill comes from the [P(doom) songs site](https://music.codercorgi.com), whose chord pages it makes. This repo is
+a copy, synced from there with the site's own parts left out, so changes made here directly are overwritten on the
+next sync; send them back as an issue or a patch instead.

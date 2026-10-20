@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-# Chord page pipeline (the chord-page skill, .claude/skills/chord-page/SKILL.md): turns a song's recording and lyrics into
-# a karaoke chord page: chords over every line, a synth and the hosted recording to play along with, the isolated vocals
-# to blend in, and a word-by-word highlighter wipe. It writes into the pdoom site (site/, the default), or with
-# --standalone DIR a self-contained folder (index.html, karaoke.js, chordpage.css, the song's data and media/) that any
-# static server can host.
+# Chord page pipeline (the chord-page skill, see its SKILL.md): turns a song's recording and lyrics into a karaoke chord
+# page: chords over every line, a synth and the hosted recording to play along with, the isolated vocals to blend in, and
+# a word-by-word highlighter wipe. --out DIR gets a self-contained folder (index.html, karaoke.js, chordpage.css, the
+# song's data and media/) that any static server can host.
 #
-#   python chordpage.py SONG.mp3 --slug my-song --title "My Song" --artist "Someone" --lyrics lyrics.txt
-#                       [--yt YOUTUBE_ID | --whisper] [--stems DIR] [--work DIR] [--site SITE_DIR] [--explainer PAGE]
-#                       [--released "Oct 2, 2026"] [--og media/og-x.png] [--permission " (shared with their permission)"]
-#                       [--key Gm] [--capo N] [--no-media] [--standalone DIR]
+#   python chordpage.py SONG.mp3 --slug my-song --title "My Song" --artist "Someone" --lyrics lyrics.txt --out DIR
+#                       [--yt YOUTUBE_ID | --whisper] [--stems DIR] [--work DIR] [--released "Oct 2, 2026"]
+#                       [--permission " (shared with their permission)" | --own] [--key Gm] [--capo N] [--no-media]
 #
 # Stages, each cached in the work dir (delete a file there to redo that stage):
 #   1. stems     demucs htdemucs splits the song into bass, drums, other and vocals (or --stems gives existing ones)
@@ -18,17 +16,17 @@
 #                a small bonus for chords in the song's key), smoothed with Viterbi so chords change on strong beats
 #   4. words     word start times: YouTube's word-timed auto-captions (--yt), or faster-whisper on the vocals (--whisper)
 #   5. align     the lyrics' words matched to those words (difflib over the whole song); unmatched words interpolated
-#   6. build     karaoke-SLUG.js, bars-SLUG.js, SLUG-chords.html (index.html, karaoke.js and chordpage.css with
-#                --standalone) and (unless --no-media) media/SLUG-instrumental.mp3 and media/SLUG-vocals.mp3
+#   6. build     index.html, karaoke.js, chordpage.css, karaoke-SLUG.js, bars-SLUG.js and (unless --no-media)
+#                media/SLUG-instrumental.mp3 and media/SLUG-vocals.mp3
 # Then it prints a report: words matched, lines that matched poorly, how often the sung melody falls on the chord's notes
 # (about 65% is good for a pop song; a single chord held all song scores about 55%), and the roughest stretches.
 #
-# Lyrics file: the sung lines in order, repeats written out, one per row; "[Section]" or "[Section | cue-id]" starts a
-# section (cue-id: the note on the explainer page that "watch this part" links to). Blank rows are ignored.
+# Lyrics file: the sung lines in order, repeats written out, one per row; "[Section]" starts a section. Blank rows are
+# ignored.
 import argparse, bisect, difflib, html, json, re, shutil, subprocess, sys
 from pathlib import Path
 
-SKILL = Path(__file__).resolve().parent.parent   # the skill's folder: templates and assets/
+SKILL = Path(__file__).resolve().parent.parent   # the skill's folder: the template and assets/
 NOTES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 QUAL = {"": ([0, 4, 7], 0), "m": ([0, 3, 7], 0), "7": ([0, 4, 7, 10], .06), "m7b5": ([0, 3, 6, 10], .06)}
 
@@ -162,8 +160,10 @@ def read_lyrics(path):
         line = raw.strip()
         if not line: continue
         m = re.fullmatch(r"\[([^\]|]+?)\s*(?:\|\s*([\w-]+))?\s*\]", line)
-        if m: secs.append({"sec": m[1].strip(), "cue": m[2], "lines": []}); continue
-        if not secs: secs.append({"sec": "Verse", "cue": None, "lines": []})
+        if m:
+            secs.append({"sec": m[1].strip(), "lines": []})
+            continue
+        if not secs: secs.append({"sec": "Verse", "lines": []})
         secs[-1]["lines"].append(line)
     return secs
 
@@ -240,8 +240,32 @@ def common_loop(bars, starts):
     return f"The most common run of chords: {', '.join(r)}." if n >= 3 else ""
 
 
+# Blocks between marker lines, each marker alone on its line in the file's own comment syntax: drop() takes a block out,
+# unwrap() keeps it and takes out just its markers
+MARKS = {".html": "<!-- {} -->", ".md": "<!-- {} -->", ".js": "// <{}>", ".css": "/* <{}> */", ".py": "# <{}>"}
+def _line(kind, name): return rf"^[ \t]*{re.escape(MARKS[kind].format(name))}[ \t]*\n"
+def drop(text, kind, name):
+    # Markers must alternate open, close: an unclosed block would swallow shared code up to the next block's close
+    o, c = _line(kind, name), _line(kind, "/" + name)
+    closes = [bool(re.fullmatch(c, m, flags=re.M)) for m in re.findall(f"{o}|{c}", text, flags=re.M)]
+    if closes != [False, True] * (len(closes) // 2) or len(closes) % 2: sys.exit(f"cut: unbalanced {name} markers in a {kind} file")
+    # A block between blank lines takes one of them with it
+    return re.sub(rf"(?<=\n\n){o}[\s\S]*?{c}\n|{o}[\s\S]*?{c}", "", text, flags=re.M)
+def unwrap(text, kind, name):
+    return re.sub(f"(?:{_line(kind, name)}|{_line(kind, '/' + name)})", "", text, flags=re.M)
+def cut(text, kind):
+    # A file as a page folder of its own gets it: any site blocks dropped
+    text = unwrap(drop(text, kind, "site"), kind, "standalone")
+    return text
+def cut_template(mode):
+    # One template for both modes: keep this mode's blocks (site or standalone) and drop the other's
+    tpl = (SKILL / "template.html").read_text()
+    return cut(tpl, ".html") if mode == "standalone" else unwrap(drop(tpl, ".html", "standalone"), ".html", "site")
+
+
 def build(args, st, bt, ch, secs, per, hits):
-    site = Path(args.standalone or args.site); slug = args.slug; site.mkdir(parents=True, exist_ok=True)
+    dest = args.out
+    slug = args.slug; dest.mkdir(parents=True, exist_ok=True)
     bars, end = ch["bars"], ch["end"]
     key = args.key or ch["key"]
     beats = bt["beats"]
@@ -266,13 +290,14 @@ def build(args, st, bt, ch, secs, per, hits):
             flat.append((si, li, text, ws))
     K = []
     if flat and flat[0][3][0][2] - (bars[0][0]) >= 3 * bar_len(bars[0][0]):
-        K.append({"sec": "Intro", "cue": None, "lines": [["", instr(bars[0][0], flat[0][3][0][2] - 0.3), bars[0][0], None]]})
+        K.append({"sec": "Intro", "lines": [["", instr(bars[0][0], flat[0][3][0][2] - 0.3), bars[0][0], None]]})
     for n, (si, li, text, ws) in enumerate(flat):
         nxt = flat[n + 1][3][0][2] if n + 1 < len(flat) else end
         last = ws[-1][2]; bl = bar_len(last)
         line_end = min(nxt, last + min(3, max(0.4, nxt - last - 0.1)))
         chords = place(text, ws, line_end, ev, chord_at)
-        if li == 0: K.append({"sec": secs[si]["sec"], "cue": secs[si]["cue"], "lines": []})
+        if li == 0:
+            K.append({"sec": secs[si]["sec"], "lines": []})
         # a short gap (a held note, a breath): its changes go on the end of the line's chord row, past the words
         if nxt - line_end < 3 * bl:
             col = max(len(text) + 2, chords[-1][0] + len(chords[-1][1]) + 2)
@@ -280,63 +305,59 @@ def build(args, st, bt, ch, secs, per, hits):
                 if line_end - 0.3 <= s < nxt - 0.3 and c != chords[-1][1]: chords.append([col, c, round(s, 2)]); col += len(c) + 2
         K[-1]["lines"].append([text, chords, round(ws[0][2], 2), [round(t, 2) for *_, t in ws] + [round(max(line_end, last + 0.25), 2)]])
         if nxt - line_end >= 3 * bl:
-            K.append({"sec": "Outro" if n + 1 == len(flat) else "Instrumental", "cue": None, "lines": [["", instr(line_end, nxt), round(line_end, 2), None]]})
+            K.append({"sec": "Outro" if n + 1 == len(flat) else "Instrumental", "lines": [["", instr(line_end, nxt), round(line_end, 2), None]]})
             if n + 1 < len(flat) and flat[n + 1][1] != 0:   # the section carries on after the break
-                K.append({"sec": secs[flat[n + 1][0]]["sec"] + " (cont.)", "cue": None, "lines": []})
+                K.append({"sec": secs[flat[n + 1][0]]["sec"] + " (cont.)", "lines": []})
     for s in K:
         for l in s["lines"]:
             if l[3] is None: l.pop()
     capo = args.capo if args.capo is not None else easy_capo([b[1] for b in bars])
     media = {"instrumental": "", "vocals": ""}
     if not args.no_media:
-        (site / "media").mkdir(exist_ok=True)
+        (dest / "media").mkdir(exist_ok=True)
         media = {"instrumental": f"media/{slug}-instrumental.mp3", "vocals": f"media/{slug}-vocals.mp3"}
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(st / "bass.wav"), "-i", str(st / "drums.wav"), "-i", str(st / "other.wav"),
                         "-filter_complex", "amix=inputs=3:normalize=0,alimiter=limit=0.95", "-b:a", "160k",
-                        "-metadata", f"title={args.title} (instrumental)", "-metadata", f"artist={args.artist}", str(site / media["instrumental"])], check=True)
+                        "-metadata", f"title={args.title} (instrumental)", "-metadata", f"artist={args.artist}", str(dest / media["instrumental"])], check=True)
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(st / "vocals.wav"), "-af", "alimiter=limit=0.95", "-b:a", "128k",
-                        "-metadata", f"title={args.title} (vocals)", "-metadata", f"artist={args.artist}", str(site / media["vocals"])], check=True)
-    song = {"key": key, "capo": capo, "explainer": "" if args.standalone else args.explainer, "about": common_loop(bars, [ws[0][2] for *_, ws in flat]), **media}
-    page_name = "index.html" if args.standalone else f"{slug}-chords.html"
+                        "-metadata", f"title={args.title} (vocals)", "-metadata", f"artist={args.artist}", str(dest / media["vocals"])], check=True)
+    song = {"key": key, "capo": capo, "about": common_loop(bars, [ws[0][2] for *_, ws in flat]), **media}
+    page_name, used_by = "index.html", "Used by karaoke.js"
     js = (f"// Karaoke chords for “{args.title}” ({page_name}, drawn by karaoke.js), made by the chord-page skill from\n"
           f"// the recording: chords read from its stems on a tracked beat grid, line and word times from the transcript\n"
           f"// matched to the lyrics. See karaoke.js for the shapes of KARAOKE_SONG and KARAOKE.\n"
           f"window.KARAOKE_SONG = {json.dumps(song, ensure_ascii=False)};\nwindow.KARAOKE = [\n" +
           ",\n".join(json.dumps(s, ensure_ascii=False, separators=(", ", ": ")) for s in K) + "\n];\n")
-    (site / f"karaoke-{slug}.js").write_text(js)
+    (dest / f"karaoke-{slug}.js").write_text(js)
     lo, mid, hi = bt["bpm"]
-    (site / f"bars-{slug}.js").write_text(
+    (dest / f"bars-{slug}.js").write_text(
         f"// Bars for “{args.title}”: one [song seconds, chord, second-half chord?] per bar, read from the recording by the\n"
-        f"// chord-page skill (about {mid:.0f} BPM). Used by karaoke.js (and an explainer's play-along strip, if it has one).\n"
+        f"// chord-page skill (about {mid:.0f} BPM). {used_by}.\n"
         f"window.BARS = {{bpm:{mid:.0f}, end:{end}, bars:[{','.join(json.dumps(b, separators=(', ', ':')) for b in bars)}]}};\n")
     key_name = re.sub(r"^([A-G][b#]?)(m?)$", lambda m: m[1] + (" minor" if m[2] else " major"), key)
     tempo = f"About {mid:.0f} BPM" + (f" (it drifts from {lo:.0f} to {hi:.0f})" if hi - lo >= 2 else "") + ", 4/4"
-    fill = {"TITLE": args.title, "ARTIST": args.artist, "SLUG": slug, "OG_IMAGE": args.og, "KEY_NAME": key_name,
+    not_ours = "Not"
+    fill = {"TITLE": args.title, "ARTIST": args.artist, "SLUG": slug, "KEY_NAME": key_name, "BACK_LINK": "",
             "TEMPO": tempo, "TEMPO_SHORT": f"about {mid:.0f} BPM", "RELEASED": f", {args.released}" if args.released else "",
-            "EXPLAINER_LINK": f' <a href="{html.escape(args.explainer)}">Back to the explainer</a>.' if args.explainer else "",
-            "PERMISSION": args.permission if args.permission is not None else
-                (" (the lyrics are shared with their permission)" if args.no_media else " (the recording, vocals and lyrics are shared with their permission)"),
+            "CREDIT": f"Song, recording and lyrics by {args.artist}." if args.own else
+                not_ours + f" affiliated with {args.artist}. The song, its recording and its "
+                "lyrics belong to their creator" + (args.permission if args.permission is not None else
+                (" (the lyrics are shared with their permission)" if args.no_media else " (the recording, vocals and lyrics are shared with their permission)")) + ".",
             "METHOD": ("How these were made: the recording was split into stems to set the vocals and drums aside, and its beats were "
                        "tracked one by one, since songs drift in tempo. Each half bar of the bass and backing was matched to the closest "
                        "chord, and the lyrics were matched word by word to a transcript, so every chord sits over the word being sung when "
                        "it changes. It’s a close reading of the recording, not the artist’s own chart, so trust your ear where they disagree. "
-                       "Play plays these chords on the song’s own timing: Synth is a simple keyboard and bass in whatever key the sheet is "
-                       "in; Recording is the song with its vocals taken out. Turn up Vocals to sing along with the original singer.")}
-    if args.standalone:
-        # A folder of its own: the standalone template (no site tabs, feedback or analytics) and the skill's copies of the
-        # player and its styles
-        tpl = (SKILL / "standalone.html").read_text()
-        for f in ["karaoke.js", "chordpage.css"]: shutil.copy(SKILL / "assets" / f, site / f)
-    else:
-        # The site's page, with its tabs (its explainer's tab current, if it has one)
-        tpl = (SKILL / "template.html").read_text()
-        nav = re.search(r'<nav class="topnav"[\s\S]*?</nav>', (site / "index.html").read_text())[0].replace(' aria-current="page"', "")
-        if args.explainer: nav = nav.replace(f'<a href="{args.explainer}" data-song>', f'<a href="{args.explainer}" data-song aria-current="page">')
-        fill["TOPNAV"] = nav
-    # Everything from the command line is escaped; the tabs and the explainer link are HTML on purpose
-    raw = {"TOPNAV", "EXPLAINER_LINK"}
+                       "Play plays these chords on the song’s own timing: Synth is a simple keyboard and bass in whatever key the sheet is in"
+                       + ("." if args.no_media else "; Recording is the song with its vocals taken out. Vocals start turned up, so you "
+                          "sing along with the original singer; turn them down to sing it yourself."))}
+    tpl = cut_template("standalone" if args.out else "site")
+    if args.out:
+        # A folder of its own, with the skill's copies of the player and its styles
+        for f in ["karaoke.js", "chordpage.css"]: (dest / f).write_text(cut((SKILL / "assets" / f).read_text(), Path(f).suffix))
+    # Everything from the command line is escaped; the tabs and the back link are HTML on purpose
+    raw = {"TOPNAV", "BACK_LINK"}
     page = re.sub(r"\{\{(\w+)\}\}", lambda m: fill[m[1]] if m[1] in raw else html.escape(fill[m[1]]), tpl)
-    (site / page_name).write_text(page)
+    (dest / page_name).write_text(page)
     return K, capo, key
 
 
@@ -369,15 +390,19 @@ def main():
     ap.add_argument("mp3", type=Path); ap.add_argument("--slug", required=True); ap.add_argument("--title", required=True)
     ap.add_argument("--artist", required=True); ap.add_argument("--lyrics", required=True, type=Path)
     ap.add_argument("--yt"); ap.add_argument("--whisper", action="store_true"); ap.add_argument("--whisper-model", default="small.en")
-    ap.add_argument("--stems"); ap.add_argument("--work", type=Path); ap.add_argument("--site", default="site")
-    ap.add_argument("--explainer", default=""); ap.add_argument("--released", default=""); ap.add_argument("--og", default="media/og-lineage.png")
-    ap.add_argument("--permission", help="the footer's credit, e.g. ' (shared with their permission)'; the default fits --no-media")
+    ap.add_argument("--stems"); ap.add_argument("--work", type=Path); ap.add_argument("--released", default="")
+    ap.add_argument("--out", "--standalone", dest="out", type=Path, metavar="DIR", help="the folder to write the page into, one song per folder")
+    credit = ap.add_mutually_exclusive_group()
+    credit.add_argument("--permission", help="the footer's credit, e.g. ' (shared with their permission)'; the default fits --no-media")
     ap.add_argument("--key"); ap.add_argument("--capo", type=int); ap.add_argument("--no-media", action="store_true")
     ap.add_argument("--no-report", action="store_true")
-    ap.add_argument("--standalone", type=Path, metavar="DIR", help="write a self-contained page folder here instead of into the site")
+    credit.add_argument("--own", action="store_true", help="the song is yours: the footer credits you instead of disclaiming the artist")
     args = ap.parse_args()
-    if not args.standalone and not (Path(args.site) / "index.html").exists():
-        sys.exit(f"--site: no {args.site}/index.html; outside the pdoom repo, pass --standalone DIR for a page folder of its own")
+    if args.out:
+        # One song per folder: its page is index.html, so a folder holding another song's data would be overwritten
+        other = [f.name for f in args.out.glob("karaoke-*.js") if f.name != f"karaoke-{args.slug}.js"]
+        if other: sys.exit(f"--out: {args.out} already holds another song ({other[0]}); use an empty folder per song")
+    elif not hasattr(args, "site"): sys.exit("--out DIR: the folder to write the page into")
     if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", args.slug): sys.exit("--slug: lowercase words joined by hyphens, e.g. my-song")
     work = args.work or Path.home() / ".cache" / "chordpage" / args.slug; work.mkdir(parents=True, exist_ok=True)
     st = stems(args, work); log("stems:", st)
@@ -387,8 +412,7 @@ def main():
     secs = read_lyrics(args.lyrics)
     per, hits, matched, total = align(secs, asr)
     K, capo, key = build(args, st, bt, ch, secs, per, hits)
-    if args.standalone: log(f"built: {args.standalone}/index.html (key {key}, capo {capo}); serve it with: npx serve {args.standalone}")
-    else: log(f"built: {args.site}/{args.slug}-chords.html, karaoke-{args.slug}.js, bars-{args.slug}.js (key {key}, capo {capo})")
+    if args.out: log(f"built: {args.out}/index.html (key {key}, capo {capo}); serve it with: npx serve {args.out}")
     if not args.no_report: report(st, ch, K, matched, total, hits, secs)
 
 

@@ -1,7 +1,5 @@
-/* Chord page styles for a standalone page (chordpage.py --standalone), cut from the pdoom site's site/site.css: its theme
-   tokens (light, and dark from the system or data-theme="dark" on <html>), base, hero and the chord sheet's rules. Every
-   line above "Standalone only" is a line of site.css (tests/static.mjs checks, in the pdoom repo), so restyle there and
-   copy across; a page made outside that repo is yours to restyle freely. */
+/* Chord page styles: theme tokens (light, and dark from the system or data-theme="dark" on <html>), base, hero and the
+   chord sheet's rules. */
 :root{
   --bg:#f4f4f2; --surface:#ffffff; --surface2:#fafaf9; --line:#e0e0dc; --fg:#141416; --muted:#5c5c63;
   --accent:#c2185b; --accent-ink:#ffffff; --mark:#ffe14d; --mark-ink:#141416; --chip:#ececea; --wa:#25d366; --wa-ink:#0b1f12; --fb:#2563eb; --fb-ink:#ffffff; --tree:#5ed1c0;
@@ -48,7 +46,7 @@ h1{font-family:var(--display);font-weight:700;margin:4px 0 0;line-height:1;lette
 .minibtn:hover{border-color:var(--accent)}
 footer{border-top:1px solid var(--line);padding-block:22px 40px;font-size:13px;color:var(--muted)}
 
-/* Chord sheet (end-of-the-show-chords.html): chords over lyrics in mono, Ultimate Guitar style. Each chord sits on a gray
+/* Chord sheet (the *-chords.html pages): chords over lyrics in mono, Ultimate Guitar style. Each chord sits on a gray
    chip with no padding, so it keeps its column over the words */
 .chordbar{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
 .chordbar .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding-block:8px}
@@ -66,6 +64,15 @@ footer{border-top:1px solid var(--line);padding-block:22px 40px;font-size:13px;c
 .cdiag .dot{fill:var(--fg);stroke:none}
 .cdiag text{fill:var(--muted);stroke:none;font:9px var(--mono)}
 .cdiag figcaption{font:700 13px var(--mono)}
+/* The chord popup (hover a chord, or tap one on a touch screen): its shape, and the Beginner | Standard | Advanced switch */
+.cpop{position:fixed;z-index:20;width:244px;box-sizing:border-box;padding:10px 12px 12px;text-align:center;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.28)}
+.cpop[hidden]{display:none}
+.cpname{font:700 18px var(--mono)}
+.cpop .cdiag svg{margin:4px auto 8px;width:93px;height:111px}
+.cpop .seg{margin:0}
+.cpop .minibtn{padding:5px 8px;font-size:12px}
+.cpop .minibtn[aria-pressed="true"]{background:var(--mark);color:var(--mark-ink);border-color:var(--mark)}
+.cpop p{margin:8px 0 0;font-size:12.5px;color:var(--muted)}
 .sheet{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 22px 26px;overflow-x:auto;margin-bottom:18px}
 .csec{display:flex;align-items:baseline;gap:12px;margin:24px 0 10px;font:700 14px var(--mono)}
 .csec a{font:500 12px var(--mono)}
@@ -87,6 +94,8 @@ body.playing .cline{cursor:pointer}
 .mixl{display:inline-flex;align-items:center;gap:5px;font:600 12px var(--mono);color:var(--muted);margin-right:8px}
 /* Backing (Synth | Recording): two buttons joined into one switch */
 .seg{display:inline-flex;margin-left:4px}.seg .minibtn+.minibtn{margin-left:-1px}.seg .minibtn:first-child{border-radius:6px 0 0 6px}.seg .minibtn:last-child{border-radius:0 6px 6px 0}
+/* A switch whose last button is hidden rounds the one before it */
+.seg .minibtn:has(+ [hidden]:last-child){border-radius:0 6px 6px 0}
 /* Phones: the toolbar wraps to several rows, too tall to pin, so it scrolls away with the page (a touch stops auto-scroll),
    except while playing, when it pins with just Listen and Mix, so Stop and the volumes stay in reach */
 @media (max-width:560px){.sheet{padding:4px 12px 20px}.chordbar{position:static}.chordbar .wrap{gap:6px 12px}body.playing .chordbar{position:sticky}
