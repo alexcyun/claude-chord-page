@@ -1,8 +1,17 @@
 {
   "name": "chord-page",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Make a karaoke chord page from a song's mp3 and lyrics: chords over every line, a synth or the recording to play along with, the isolated vocals to blend in, and a word-by-word highlighter wipe.",
-  "author": { "name": "Alex (@codercorgi)", "url": "https://x.com/codercorgi" },
+  "author": {
+    "name": "Alex (@codercorgi)",
+    "url": "https://x.com/codercorgi"
+  },
   "homepage": "https://music.codercorgi.com/end-of-the-show-chords",
-  "keywords": ["music", "chords", "karaoke", "guitar", "demucs"]
+  "keywords": [
+    "music",
+    "chords",
+    "karaoke",
+    "guitar",
+    "demucs"
+  ]
 }
