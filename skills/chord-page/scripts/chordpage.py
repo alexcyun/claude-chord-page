@@ -16,8 +16,12 @@
 #                a small bonus for chords in the song's key), smoothed with Viterbi so chords change on strong beats
 #   4. words     word start times: YouTube's word-timed auto-captions (--yt), or faster-whisper on the vocals (--whisper)
 #   5. align     the lyrics' words matched to those words (difflib over the whole song); unmatched words interpolated
-#   6. build     index.html, karaoke.js, chordpage.css, karaoke-SLUG.js, bars-SLUG.js and (unless --no-media)
-#                media/SLUG-instrumental.mp3 and media/SLUG-vocals.mp3
+#   6. melody    the sung notes, tracked on the vocals stem with pyin and cut into notes where the pitch holds steady
+#   7. build     index.html, karaoke.js, chordpage.css, karaoke-SLUG.js, bars-SLUG.js, melody-SLUG.js and (unless
+#                --no-media) media/SLUG-instrumental.mp3 and media/SLUG-vocals.mp3
+# A page that already exists gets its melody with --melody-only: the vocals stem as the input, then only stage 6, the
+# melody file and its script tag on the page (its other files are left as they are):
+#   python chordpage.py VOCALS.mp3 --melody-only --slug my-song [--out DIR]
 # Then it prints a report: words matched, lines that matched poorly, how often the sung melody falls on the chord's notes
 # (about 65% is good for a pop song; a single chord held all song scores about 55%), and the roughest stretches.
 #
@@ -193,7 +197,93 @@ def align(secs, asr):
     return per, hits, matched, len(flat)
 
 
-# ---------- 6. build ----------
+# ---------- 6. melody ----------
+def melody(vocals, work):
+    # The sung notes as [start, seconds, MIDI note]. pyin tracks the pitch every 10 ms; its voicing probability runs low
+    # on processed vocals (reverb, doubled takes), so frames count as sung by its voiced flag and loudness instead. A note
+    # runs while the pitch stays within 0.6 semitones of the note so far (vibrato stays inside it) and ends where it
+    # leaves for 40 ms or the singing stops; shorter than 70 ms is a slide or a consonant, not a note. Same notes across a
+    # tiny gap join, a note under 0.1 s touching a longer one is the slide into or out of it and joins it, and a note about
+    # an octave (10 semitones or more) away from its neighbors is a tracking slip, moved back; a real leap of a sixth stays.
+    # The pitch track is cached (pitch.npz, with the file it came from: a different or changed vocals file tracks again),
+    # so changing how notes are cut reruns in a second
+    import numpy as np
+    f, st = work / "pitch.npz", Path(vocals).stat()
+    source = f"{Path(vocals).resolve()}|{st.st_size}|{int(st.st_mtime)}"
+    cached = np.load(f) if f.exists() else None
+    if cached is not None and "source" in cached and str(cached["source"]) == source: m = cached["midi"]
+    else:
+        import librosa
+        log("melody: tracking the sung pitch (a minute or two)…")
+        v, _ = librosa.load(vocals, sr=16000)
+        f0, vf, _ = librosa.pyin(v, fmin=70, fmax=1000, sr=16000, hop_length=160, frame_length=2048)
+        rms = librosa.feature.rms(y=v, frame_length=2048, hop_length=160)[0][:len(f0)]
+        ok = vf & (rms > 0.1 * np.percentile(rms, 95))
+        m = np.full(len(f0), np.nan); m[ok] = librosa.hz_to_midi(f0[ok])
+        np.savez_compressed(f, midi=m, source=source)
+    s, tol, need, shortest = 0.01, 0.6, 4, 7   # 10 ms frames
+    ok = ~np.isnan(m); sm = m.copy()
+    for i in np.flatnonzero(ok): sm[i] = np.nanmedian(m[max(0, i - 2):i + 3])
+    raw, cur, dev = [], None, 0
+    def close(end):
+        if cur and end - cur[0] >= shortest: raw.append([cur[0], end, float(np.median(cur[1]))])
+    for i in range(len(sm)):
+        if not ok[i]:
+            close(i); cur, dev = None, 0; continue
+        if cur is None: cur, dev = [i, [sm[i]]], 0; continue
+        if abs(sm[i] - np.median(cur[1][-20:])) > tol:
+            dev += 1
+            if dev >= need: close(i - dev + 1); cur, dev = [i - dev + 1, list(sm[i - dev + 1:i + 1])], 0
+        else: dev = 0; cur[1].append(sm[i])
+    close(len(sm))
+    notes = []
+    for a, b, p in raw:
+        n = [a * s, (b - a) * s, int(round(p))]
+        if notes and notes[-1][2] == n[2] and n[0] - sum(notes[-1][:2]) <= 0.06: notes[-1][1] = sum(n[:2]) - notes[-1][0]
+        else: notes.append(n)
+    touch = lambda x, y: abs(y[0] - sum(x[:2])) <= 0.05   # x ends where y starts
+    i = 0
+    while i < len(notes):
+        n, prev, nxt = notes[i], notes[i - 1] if i else None, notes[i + 1] if i + 1 < len(notes) else None
+        into = [x for x in (prev, nxt) if x and x[1] > n[1] and (touch(x, n) if x is prev else touch(n, x))]
+        if n[1] < 0.1 and into:
+            x = max(into, key=lambda x: x[1])
+            if x is prev: x[1] = sum(n[:2]) - x[0]
+            else: x[1] = sum(x[:2]) - n[0]; x[0] = n[0]
+            notes.pop(i)
+        else: i += 1
+    P = [n[2] for n in notes]
+    for i, n in enumerate(notes):
+        near = P[max(0, i - 4):i] + P[i + 1:i + 5]
+        if len(near) >= 3:
+            mid = float(np.median(near))
+            while n[2] - mid >= 10: n[2] -= 12
+            while mid - n[2] >= 10: n[2] += 12
+    return [[round(a, 2), round(d, 2), p] for a, d, p in notes]
+
+
+def melody_js(notes, K, title, page_name):
+    # The notes sung during a line (from just before its first word to its end; ad-libs between lines and stem bleed in
+    # the instrumentals are left out), with the range the contour is drawn across: most of the notes, not the odd outlier
+    spans = [(l[3][0] - 0.25, l[3][-1]) for s in K for l in s["lines"] if len(l) > 3 and l[3]]
+    keep = [n for n in notes if any(a <= n[0] < b for a, b in spans)]
+    P = sorted(n[2] for n in keep) or [60]
+    lo, hi = P[len(P) * 3 // 100], P[min(len(P) - 1, len(P) * 97 // 100)]
+    if hi - lo < 7: lo, hi = (lo + hi) // 2 - 4, (lo + hi) // 2 + 4
+    sung = sum(b - a for a, b in spans) or 1
+    covered = sum(min(n[1], b - n[0]) for n in keep for a, b in spans if a <= n[0] < b)
+    js = (f"// The sung melody of “{title}” ({page_name}), drawn by karaoke.js as a contour over the words: one\n"
+          f"// [song seconds, seconds, MIDI note] per note, tracked on the vocals stem by the chord-page skill (pyin), not\n"
+          f"// transcribed by ear.\n"
+          f"// lo and hi are the range the contour spans; notes past them sit at its edge.\n"
+          f"window.MELODY = {{lo:{lo}, hi:{hi}, notes:[{','.join(json.dumps(n, separators=(',', ':')) for n in keep)}]}};\n")
+    return js, {"notes": len(keep), "lo": lo, "hi": hi, "covered": covered / sung}
+
+
+def note_name(m): return f"{NOTES[m % 12]}{m // 12 - 1}"
+
+
+# ---------- 7. build ----------
 def place(text, ws, end, changes, chord_at):
     # Chords over a line: the chord sounding when it starts (or one changing in its first 0.8 s) on its first word, then
     # each change over the word being sung when it happens; a change during the held last note goes past the words
@@ -263,7 +353,7 @@ def cut_template(mode):
     return cut(tpl, ".html") if mode == "standalone" else unwrap(drop(tpl, ".html", "standalone"), ".html", "site")
 
 
-def build(args, st, bt, ch, secs, per, hits):
+def build(args, st, bt, ch, secs, per, hits, mel):
     dest = args.out
     slug = args.slug; dest.mkdir(parents=True, exist_ok=True)
     bars, end = ch["bars"], ch["end"]
@@ -329,6 +419,8 @@ def build(args, st, bt, ch, secs, per, hits):
           f"window.KARAOKE_SONG = {json.dumps(song, ensure_ascii=False)};\nwindow.KARAOKE = [\n" +
           ",\n".join(json.dumps(s, ensure_ascii=False, separators=(", ", ": ")) for s in K) + "\n];\n")
     (dest / f"karaoke-{slug}.js").write_text(js)
+    mjs, mstat = melody_js(mel, K, args.title, page_name)
+    (dest / f"melody-{slug}.js").write_text(mjs)
     lo, mid, hi = bt["bpm"]
     (dest / f"bars-{slug}.js").write_text(
         f"// Bars for “{args.title}”: one [song seconds, chord, second-half chord?] per bar, read from the recording by the\n"
@@ -358,11 +450,11 @@ def build(args, st, bt, ch, secs, per, hits):
     raw = {"TOPNAV", "BACK_LINK"}
     page = re.sub(r"\{\{(\w+)\}\}", lambda m: fill[m[1]] if m[1] in raw else html.escape(fill[m[1]]), tpl)
     (dest / page_name).write_text(page)
-    return K, capo, key
+    return K, capo, key, mstat
 
 
 # ---------- report ----------
-def report(st, ch, K, matched, total, hits, secs):
+def report(st, ch, K, matched, total, hits, secs, mstat):
     import numpy as np, librosa
     log(f"\nwords matched to the transcript: {matched}/{total} ({100 * matched / max(1, total):.0f}%)")
     weak = [(secs[si]["sec"], secs[si]["lines"][li]) for (si, li), h in hits.items() if sum(h) / len(h) < 0.6]
@@ -383,12 +475,50 @@ def report(st, ch, K, matched, total, hits, secs):
         c = b[2] if len(b) > 2 and x >= (b[0] + nxt) / 2 else b[1]
         hit.append(p in tones(c))
     log(f"melody on chord notes: {100 * np.mean(hit):.0f}% (about 65% is typical; one chord held all song scores about 55%)")
+    log_melody(mstat)
+
+
+def log_melody(m):
+    log(f"melody: {m['notes']} notes across {note_name(m['lo'])}–{note_name(m['hi'])}, covering {100 * m['covered']:.0f}% of the sung lines' time "
+        "(70% or more is good; much less means the vocals stem is hard to track, so check it by ear)")
+
+
+def melody_only(args, work):
+    # A page made before melodies (or one whose melody should be redone; delete pitch.npz in the work dir to track the
+    # pitch again too): its lines come from its karaoke-SLUG.js, the notes from the vocals stem given as the input
+    dest = args.out
+    data = dest / f"karaoke-{args.slug}.js"
+    if not data.exists(): sys.exit(f"--melody-only: no {data}; make the page first")
+    src = data.read_text()
+    K = json.loads(re.search(r"window\.KARAOKE = (\[[\s\S]*\]);", src)[1])
+    page = dest / "index.html"
+    if not page.exists(): sys.exit(f"--melody-only: no {page}; make the page first")
+    title = args.title or (re.match(r"// Karaoke chords for [“\"](.+?)[”\"]", src) or [None, args.slug])[1]
+    # The page needs the melody's script tag and the Melody toggle (a page made before melodies has neither); both are
+    # worked out before anything is written, so a page this can't patch is left as it was
+    html_ = page.read_text(); tag = f'<script src="melody-{args.slug}.js"></script>'
+    if tag not in html_:
+        anchor = f'<script src="karaoke-{args.slug}.js"></script>'
+        if anchor not in html_: sys.exit(f"--melody-only: {page} doesn't load karaoke-{args.slug}.js; add {tag} before it by hand")
+        html_ = html_.replace(anchor, tag + "\n" + anchor)
+    if 'id="tMelody"' not in html_:
+        diag = re.search(r'<button class="minibtn" id="diag"[^>]*>[^<]*</button>', html_)
+        if not diag: sys.exit(f"--melody-only: {page} has no Chord diagrams button to put the Melody toggle beside; rebuild the page")
+        html_ = html_.replace(diag[0], diag[0] + '<button class="minibtn" id="tMelody" aria-pressed="false" hidden>Melody</button>')
+    mjs, mstat = melody_js(melody(args.mp3, work), K, title, page.name)
+    (dest / f"melody-{args.slug}.js").write_text(mjs)
+    page.write_text(html_)
+    if args.out:
+        # A page folder has its own copies of the player and its styles, which may predate melodies: refresh them
+        for f in ["karaoke.js", "chordpage.css"]: (dest / f).write_text(cut((SKILL / "assets" / f).read_text(), Path(f).suffix))
+    log(f"built: {dest}/melody-{args.slug}.js"); log_melody(mstat)
 
 
 def main():
     ap = argparse.ArgumentParser(description="Make a karaoke chord page from a recording and its lyrics")
-    ap.add_argument("mp3", type=Path); ap.add_argument("--slug", required=True); ap.add_argument("--title", required=True)
-    ap.add_argument("--artist", required=True); ap.add_argument("--lyrics", required=True, type=Path)
+    ap.add_argument("mp3", type=Path); ap.add_argument("--slug", required=True); ap.add_argument("--title")
+    ap.add_argument("--artist"); ap.add_argument("--lyrics", type=Path)
+    ap.add_argument("--melody-only", action="store_true", help="for a page already made: the input is its vocals stem, and only the melody is added")
     ap.add_argument("--yt"); ap.add_argument("--whisper", action="store_true"); ap.add_argument("--whisper-model", default="small.en")
     ap.add_argument("--stems"); ap.add_argument("--work", type=Path); ap.add_argument("--released", default="")
     ap.add_argument("--out", "--standalone", dest="out", type=Path, metavar="DIR", help="the folder to write the page into, one song per folder")
@@ -398,6 +528,9 @@ def main():
     ap.add_argument("--no-report", action="store_true")
     credit.add_argument("--own", action="store_true", help="the song is yours: the footer credits you instead of disclaiming the artist")
     args = ap.parse_args()
+    if not args.melody_only:
+        for a in ["title", "artist", "lyrics"]:
+            if not getattr(args, a): ap.error(f"--{a} is required")
     if args.out:
         # One song per folder: its page is index.html, so a folder holding another song's data would be overwritten
         other = [f.name for f in args.out.glob("karaoke-*.js") if f.name != f"karaoke-{args.slug}.js"]
@@ -405,15 +538,17 @@ def main():
     elif not hasattr(args, "site"): sys.exit("--out DIR: the folder to write the page into")
     if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", args.slug): sys.exit("--slug: lowercase words joined by hyphens, e.g. my-song")
     work = args.work or Path.home() / ".cache" / "chordpage" / args.slug; work.mkdir(parents=True, exist_ok=True)
+    if args.melody_only: return melody_only(args, work)
     st = stems(args, work); log("stems:", st)
     bt = beats(st, work); log(f"beats: {len(bt['beats'])}, tempo {bt['bpm'][1]} BPM (from {bt['bpm'][0]} to {bt['bpm'][2]})")
     ch = chords(st, work, bt, args.key); log(f"chords: {len(ch['bars'])} bars, key {ch['key']}")
     asr = words(args, st, work); log(f"words: {len(asr)} from the transcript")
     secs = read_lyrics(args.lyrics)
     per, hits, matched, total = align(secs, asr)
-    K, capo, key = build(args, st, bt, ch, secs, per, hits)
+    mel = melody(st / "vocals.wav", work); log(f"melody: {len(mel)} notes")
+    K, capo, key, mstat = build(args, st, bt, ch, secs, per, hits, mel)
     if args.out: log(f"built: {args.out}/index.html (key {key}, capo {capo}); serve it with: npx serve {args.out}")
-    if not args.no_report: report(st, ch, K, matched, total, hits, secs)
+    if not args.no_report: report(st, ch, K, matched, total, hits, secs, mstat)
 
 
 if __name__ == "__main__":

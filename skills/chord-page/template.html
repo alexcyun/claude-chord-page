@@ -1,6 +1,6 @@
 <!doctype html>
 <!-- Karaoke chords for "{{TITLE}}", made by the chord-page skill from the recording.
-     Data in karaoke-{{SLUG}}.js and bars-{{SLUG}}.js, logic in karaoke.js -->
+     Data in karaoke-{{SLUG}}.js, bars-{{SLUG}}.js and melody-{{SLUG}}.js, logic in karaoke.js -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -47,7 +47,7 @@
   <div class="cgrp"><span>Easy shapes</span><button class="minibtn" id="capo" aria-pressed="false">Capo</button></div>
   <div class="cgrp"><span>Size</span><button class="minibtn" id="fDown" aria-label="Smaller text">A−</button><button class="minibtn" id="fUp" aria-label="Larger text">A+</button></div>
   <div class="cgrp"><span>Scroll</span><button class="minibtn" id="scroll" aria-pressed="false">▶ Auto-scroll</button><input id="speed" type="range" min="1" max="10" value="3" aria-label="Scroll speed"></div>
-  <div class="cgrp"><span>Show</span><button class="minibtn" id="diag" aria-pressed="true">Chord diagrams</button>
+  <div class="cgrp"><span>Show</span><button class="minibtn" id="diag" aria-pressed="true">Chord diagrams</button><button class="minibtn" id="tMelody" aria-pressed="false" hidden>Melody</button>
   </div>
   <div class="cgrp"><span>Fingering</span><span class="seg" role="group" aria-label="Chord shape level"><button class="minibtn" data-shape="easy" aria-pressed="false">Beginner</button><button class="minibtn" data-shape="std" aria-pressed="true">Standard</button><button class="minibtn" data-shape="adv" aria-pressed="false">Advanced</button></span></div>
 </div></div>
@@ -66,6 +66,7 @@
 </footer>
 
 <script src="bars-{{SLUG}}.js"></script>
+<script src="melody-{{SLUG}}.js"></script>
 <script src="karaoke-{{SLUG}}.js"></script>
 <script src="karaoke.js"></script>
 </body>

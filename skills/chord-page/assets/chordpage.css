@@ -87,6 +87,11 @@ body.playing .cline{cursor:pointer}
 /* The highlighter wipe: the words sung so far, filled in highlighter yellow (a copy of the words, clipped to --w) */
 .lyr{position:relative}
 .lyr::after{content:attr(data-t);position:absolute;left:0;top:0;bottom:0;width:var(--w,0);overflow:hidden;white-space:pre;background:var(--mark);color:var(--mark-ink);border-radius:2px;pointer-events:none}
+/* Melody: the sung notes as a contour between the chords and the words, a dash per note as wide as the words it's sung
+   over and as high as its pitch in the song's range (--melh tall, from karaoke.js); sung notes fill in highlighter yellow */
+.mel{display:block;position:relative;height:var(--melh,1.6em);margin:3px 0 4px}
+.mel i{position:absolute;left:calc(var(--a)*1ch);width:calc(var(--n)*1ch - 2px);bottom:calc(var(--y)*(100% - 4px));height:4px;border-radius:2px;background:color-mix(in srgb,var(--muted) 65%,transparent)}
+.mel i.sung{background:var(--mark);box-shadow:0 0 0 1px color-mix(in srgb,var(--mark-ink) 55%,transparent)}
 /* Loop: an icon toggle beside Play, highlighter yellow when on */
 .loopbtn{display:inline-flex;align-items:center;padding:6px 8px;margin-left:4px}
 .loopbtn svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
