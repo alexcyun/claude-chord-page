@@ -93,10 +93,12 @@ body.playing .cline{cursor:pointer}
 .mel i{position:absolute;left:calc(var(--a)*1ch);width:calc(var(--n)*1ch - 2px);bottom:calc(var(--y)*(100% - 4px));height:4px;border-radius:2px;background:color-mix(in srgb,var(--muted) 65%,transparent)}
 .mel i.sung{background:var(--mark);box-shadow:0 0 0 1px color-mix(in srgb,var(--mark-ink) 55%,transparent)}
 /* Pitch lane (karaoke.js draws it on the canvas): a row of the toolbar while playing, so it pins with it and never covers
-   the sheet or the video; the Mic button beside it, and the mic's messages over the far end of the lane, clear of the now line */
-.lane{display:none;flex:1 0 100%;position:relative;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:6px}
+   the sheet or the video; the Mic button beside it, and the mic's messages over the far end of the lane, clear of the now line.
+   The canvas is width 0 and the lane min-width 0, so the canvas's pixel buffer (wider than the canvas on a 2x screen) never
+   sets the lane's minimum width: it did, and widened the page, and the resize observer then widened it again */
+.lane{display:none;flex:1 0 100%;min-width:0;position:relative;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:6px}
 body.playing .lane{display:flex}
-.lane canvas{flex:1;min-width:0;height:104px;display:block}
+.lane canvas{flex:1;width:0;min-width:0;height:104px;display:block}
 .micbtn{display:inline-flex;align-items:center;gap:5px}
 .micbtn svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .micnote{position:absolute;right:76px;top:10px;max-width:min(52ch,62%);margin:0;padding:5px 9px;font-size:12.5px;line-height:1.4;background:var(--surface);border:1px solid var(--line);border-radius:6px;pointer-events:none}
