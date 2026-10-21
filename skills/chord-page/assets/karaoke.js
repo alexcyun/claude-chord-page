@@ -3,7 +3,8 @@
 // vocals) with a karaoke wipe. Pages are made by the chord-page skill. Song-specific settings come from KARAOKE_SONG:
 //   {key: "Gm", capo: 5 (0 hides the capo view), about: "a line under the key", instrumental: "media/….mp3",
 //    vocals: "media/….mp3" (either "" to hide it)}
-// and the bar grid from BARS (the page's bars-*.js).
+// and the bar grid from BARS (the page's bars-*.js), and, if the page has one, the sung melody from MELODY (its melody-*.js):
+//   {lo, hi (the MIDI range the contour spans), notes: [[songSeconds, seconds, midiNote], …]}
 // KARAOKE = [{sec, lines:[[text, [[charIndex, chord, songSeconds], …], songSeconds, [wordStart, …, lineEnd]], …]}, …];
 // a chord past a line's words changes during a held note, the word times drive the highlighter wipe, and a line with no
 // text is an instrumental row.
@@ -78,13 +79,17 @@ function render(){
       // The words sit in a span that carries the highlighter wipe (::after, a copy of the words in data-t, so find-in-page
       // sees them once); data-o is where this piece starts in the whole line
       if (text){
-        if (chords.length || !i) pre.append("\n");
-        const ly = document.createElement("span"), o = line.indexOf(text, off); off = o + text.length;
+        const o = line.indexOf(text, off); off = o + text.length;
+        // The melody's contour, when it's on, is a row of its own that starts on a new line, so it takes the newline's place
+        if (melOn()) pre.append(melRow(LINES[L], o, text.length));
+        else if (chords.length || !i) pre.append("\n");
+        const ly = document.createElement("span");
         ly.className = "lyr"; ly.dataset.o = o; ly.dataset.t = text; ly.textContent = text; pre.append(ly);
       }
       sheet.append(pre);
     }); L++; }
   }
+  sheet.style.setProperty("--melh", MEL ? Math.min(2.4, Math.max(1.2, (MEL.hi - MEL.lo) * 0.14 + 0.2)) + "em" : "");
   $("tVal").textContent = shift > 6 ? shift - 12 : (shift > 0 ? "+" : "") + shift;
   $("capo").setAttribute("aria-pressed", capo());
   $("keyNote").textContent = capo() ? `Capo on fret ${SONG.capo}: these shapes sound in ${keyName(KEY)}, matching the recording.`
@@ -240,7 +245,7 @@ addEventListener("touchstart", stopScroll, {passive: true});
 // first line on screen; tapping a line while it plays jumps there.
 const BARS = window.BARS.bars, BAR_END = window.BARS.end, LINES = [];
 for (const s of window.KARAOKE) for (const [text, chords, at, words] of s.lines)
-  LINES.push({at, times: chords.map(c => c[2]), words, idx: [...text.matchAll(/\S+/g)].map(m => m.index), len: text.length});
+  LINES.push({at, times: chords.map(c => c[2]), words, idx: [...text.matchAll(/\S+/g)].map(m => m.index), len: text.length, notes: []});
 // How far through its words a line is sung at song time t, in characters: each word's start time (the line's 4th entry,
 // from YouTube's word-timed captions matched to the lyrics, and its end) is a point, and the wipe runs straight between
 // them, so a held note fills slowly and a quick run fills fast
@@ -250,6 +255,34 @@ function sungTo(L, t){
     const c0 = L.idx[k], c1 = L.idx[k + 1] ?? L.len; return c0 + (c1 - c0) * (t - w[k]) / (w[k + 1] - w[k]);
   }
   return L.len;
+}
+// The melody: each note belongs to the line being sung when it starts and spans the characters its words are sung over
+// (by sungTo, so the contour keeps step with the wipe). Drawn as a dash per note between the chords and the words, as high
+// as its pitch within the song's range, filling in highlighter yellow as it's sung; its title is the note's name as
+// sung: in the transposed key, or the recording's in the capo view (whose chord names are shapes, not pitches). The Melody toggle shows or hides it (saved as chordpage-melody, on unless turned off)
+const MEL = window.MELODY?.notes?.length ? window.MELODY : null;
+if (MEL) for (const [t, dur, m] of MEL.notes){
+  const L = LINES[LINES.findLastIndex(l => l.at - 0.3 <= t)];
+  if (!L?.words || t >= L.words.at(-1)) continue;
+  const a = sungTo(L, t);
+  L.notes.push({t, m, a, b: Math.min(Math.max(sungTo(L, t + dur), a + 0.8), Math.max(L.len, a + 0.8))});
+}
+const MELODY_KEY = "chordpage-melody";
+let melodyOn = true;
+try { melodyOn = localStorage.getItem(MELODY_KEY) !== "0"; } catch {}
+const melOn = () => melodyOn && !!MEL;
+const signed = s => s > 6 ? s - 12 : s;
+const noteName = m => NOTES[(m % 12 + 12) % 12] + (Math.floor(m / 12) - 1);
+// One wrapped piece's row of dashes: the piece runs from character o of its line for len characters
+function melRow(L, o, len){
+  const row = document.createElement("span"); row.className = "mel"; row.setAttribute("aria-hidden", "true");
+  const y = m => Math.min(1, Math.max(0, (m - MEL.lo) / Math.max(1, MEL.hi - MEL.lo))).toFixed(3);
+  for (const n of L.notes) if (n.a < o + len && n.b > o){
+    const a = Math.max(n.a, o) - o, w = Math.min(n.b, o + len + 1) - o - a;
+    const d = document.createElement("i"); d.dataset.t = n.t; d.title = noteName(n.m + (capo() ? 0 : signed(shift)));
+    d.style.cssText = `--a:${a.toFixed(2)};--n:${w.toFixed(2)};--y:${y(n.m)}`; row.append(d);
+  }
+  return row;
 }
 const QUAL = {"": [0, 4, 7], m: [0, 3, 7], "7": [0, 4, 7, 10], m7: [0, 3, 7, 10], m7b5: [0, 3, 6, 10]};
 let ac = null, play = null, followAfter = 0, song = null, vox = null, gBand = null, gVox = null;
@@ -321,11 +354,14 @@ function bar(k){
 function mark(){
   const sheet = $("sheet"), cur = play?.cur;
   sheet.querySelectorAll(".cline.playing .lyr").forEach(el => el.style.removeProperty("--w"));
+  sheet.querySelectorAll(".mel i.sung").forEach(el => el.classList.remove("sung"));
   sheet.querySelectorAll(".cline.playing, b.on").forEach(el => el.classList.remove("playing", "on"));
-  if (!cur){ if (play) play.lyrs = []; return; }
+  if (!cur){ if (play) play.lyrs = play.mels = []; return; }
   sheet.querySelectorAll(`[data-l="${cur.line}"]`).forEach(el => el.classList.add("playing"));
   play.lyrs = [...sheet.querySelectorAll(".cline.playing .lyr")];   // the wipe's spans, for paint()
+  play.mels = [...sheet.querySelectorAll(".cline.playing .mel i")];  // and the melody's dashes
   if (cur.k >= 0) sheet.querySelector(`[data-c="${cur.line}:${cur.k}"]`)?.classList.add("on");
+  if (play.paused) wipe(play);   // a sheet redrawn while paused (text size, Melody) keeps the wipe where it stopped
 }
 function frame(){
   if (!play) return;
@@ -363,11 +399,14 @@ function clock(){
 // playback: it ends when that playback does or pauses (a restart or resume starts its own)
 function paint(p, tok = p.paintTok = {}){
   if (play !== p || p.paintTok !== tok || p.paused) return;
-  if (p.cur){
-    const x = sungTo(LINES[p.cur.line], clock());
-    for (const el of p.lyrs || []) el.style.setProperty("--w", Math.max(0, Math.min(el.dataset.t.length, x - el.dataset.o)) + "ch");
-  }
+  wipe(p);
   requestAnimationFrame(() => paint(p, tok));
+}
+function wipe(p){
+  if (!p.cur) return;
+  const t = clock(), x = sungTo(LINES[p.cur.line], t);
+  for (const el of p.lyrs || []) el.style.setProperty("--w", Math.max(0, Math.min(el.dataset.t.length, x - el.dataset.o)) + "ch");
+  for (const el of p.mels || []) el.classList.toggle("sung", t >= el.dataset.t - 0.02);
 }
 function startPlay(line){
   stopPlay(); stopScroll();
@@ -486,6 +525,12 @@ $("bSong").hidden = !SONG.instrumental; $("bSong").closest(".seg").hidden = $("b
 const setSize = d => { size = Math.min(26, Math.max(11, size + d)); document.documentElement.style.setProperty("--csize", size + "px"); render(); };
 $("fUp").onclick = () => setSize(2);
 $("fDown").onclick = () => setSize(-2);
+$("tMelody").hidden = !MEL; $("tMelody").setAttribute("aria-pressed", melodyOn);
+$("tMelody").onclick = () => {
+  melodyOn = !melodyOn; $("tMelody").setAttribute("aria-pressed", melodyOn);
+  try { localStorage.setItem(MELODY_KEY, melodyOn ? "1" : "0"); } catch {}
+  render();
+};
 $("diag").onclick = () => { const on = $("diagrams").hidden; $("diagrams").hidden = !on; $("diag").setAttribute("aria-pressed", on); };
 // Re-wrap when the sheet's width changes (rotation, resizing), and once the mono font has loaded
 let lastW = 0;

@@ -15,6 +15,7 @@ out/my-song/
   chordpage.css            its styles, light and dark
   karaoke-my-song.js       the song: lyrics, chords over them, a time for every word
   bars-my-song.js          the bar grid: one or two chords per bar, on the song's own clock
+  melody-my-song.js        the sung melody: a start, a length and a pitch per note
   media/my-song-instrumental.mp3   the recording without its vocals
   media/my-song-vocals.mp3         the vocals on their own
 ```
@@ -25,7 +26,9 @@ switch picks the shapes, in any key: **Beginner** (the chord's notes on the top 
 **Standard** (the usual song-book shape) or **Advanced** (a full barre up the neck).
 **Play** runs a backing on the song's own timing, after a count-in: **Synth** (a small Web Audio keyboard and bass, in
 whatever key you transpose to) or **Recording** (the instrumental). A **Vocals** slider blends in the original singer.
-While it plays, the line being sung lights up and fills in word by word. Pressing Play again **pauses**, and
+While it plays, the line being sung lights up and fills in word by word. Between the chords and the words, a **Melody**
+contour draws each sung note as a dash, as high as its pitch and as wide as the words it's sung over, filling in as
+it's sung (hover one for the note's name; the Melody button hides it). Pressing Play again **pauses**, and
 **Resume** picks up from the same spot. Tap any line to play from there. **Loop** repeats the song. Loop starts on and
 Vocals at 0.8, so the first Play sounds like the record; the page remembers your choices.
 
@@ -39,11 +42,14 @@ How it gets there (`skills/chord-page/scripts/chordpage.py`):
    decoded chords; the capo from whichever fret gives the most open shapes.
 4. **Words**: start times from YouTube's word-timed auto-captions (`--yt`) or faster-whisper on the vocals stem
    (`--whisper`), matched word by word to your lyrics (the transcript only gives timing, so mishearings don't matter).
-5. **Build**: each chord over the word being sung when it changes, a change during a held note past the line's words,
+5. **Melody**: the sung pitch tracked on the vocals stem (librosa's pyin) and cut into notes where it holds steady.
+   A page made before this stage existed gets one with `--melody-only`, from its vocals stem.
+6. **Build**: each chord over the word being sung when it changes, a change during a held note past the line's words,
    instrumental stretches as rows of chords.
 
 It then reports how many words matched (aim for 90%+), lines that matched poorly, and how often the sung melody lands
-on the chord's notes (about 65% is typical for pop; about 55% means no better than one chord held all song).
+on the chord's notes (about 65% is typical for pop; about 55% means no better than one chord held all song), and how
+much of the sung lines' time the melody's notes cover (70% or more is good).
 
 This is scaffolding, not a finished machine. The chord reading is a close reading, not the artist's chart: expect to
 listen and fix things, and to extend the script for songs it doesn't fit yet (odd meters, no drums, key changes, chord
