@@ -245,7 +245,7 @@ addEventListener("touchstart", stopScroll, {passive: true});
 // first line on screen; tapping a line while it plays jumps there.
 const BARS = window.BARS.bars, BAR_END = window.BARS.end, LINES = [];
 for (const s of window.KARAOKE) for (const [text, chords, at, words] of s.lines)
-  LINES.push({at, times: chords.map(c => c[2]), words, idx: [...text.matchAll(/\S+/g)].map(m => m.index), len: text.length, notes: []});
+  LINES.push({at, text, times: chords.map(c => c[2]), words, idx: [...text.matchAll(/\S+/g)].map(m => m.index), len: text.length, notes: []});
 // How far through its words a line is sung at song time t, in characters: each word's start time (the line's 4th entry,
 // from YouTube's word-timed captions matched to the lyrics, and its end) is a point, and the wipe runs straight between
 // them, so a held note fills slowly and a quick run fills fast
@@ -305,7 +305,7 @@ try {
 // even across its travel
 function audio(){
   // iOS mutes Web Audio under the silent switch unless the page says it's playback, like a music player
-  if (navigator.audioSession) navigator.audioSession.type = "playback";
+  if (navigator.audioSession) navigator.audioSession.type = micWant ? "play-and-record" : "playback";
   if (!ac){
     ac = new (window.AudioContext || window.webkitAudioContext)();
     gBand = ac.createGain(); gVox = ac.createGain(); gBand.connect(ac.destination); gVox.connect(ac.destination); setGains();
@@ -361,7 +361,7 @@ function mark(){
   play.lyrs = [...sheet.querySelectorAll(".cline.playing .lyr")];   // the wipe's spans, for paint()
   play.mels = [...sheet.querySelectorAll(".cline.playing .mel i")];  // and the melody's dashes
   if (cur.k >= 0) sheet.querySelector(`[data-c="${cur.line}:${cur.k}"]`)?.classList.add("on");
-  if (play.paused) wipe(play);   // a sheet redrawn while paused (text size, Melody) keeps the wipe where it stopped
+  if (play.paused){ const t = clock(); wipe(play, t); drawLane(t); }   // a sheet redrawn while paused (text size, Melody, transpose) keeps the wipe and the lane where they stopped
 }
 function frame(){
   if (!play) return;
@@ -377,9 +377,9 @@ function frame(){
     const moved = line !== play.cur?.line;
     play.cur = {line, k}; mark();
     if (moved && performance.now() > followAfter){
-      // The line goes a third of the way down
+      // The line goes a third of the way down, and below the pinned toolbar (and the lane in it)
       const el = $("sheet").querySelector(`[data-l="${line}"]`);
-      let at = innerHeight * 0.35;
+      let at = Math.max(innerHeight * 0.35, $("chordbar").offsetHeight + 16);
       scrollTo({top: el.getBoundingClientRect().top + scrollY - at,
         behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"});
     }
@@ -395,16 +395,16 @@ function clock(){
   if (ct !== lastCT){ lastCT = ct; lastWall = w; }
   return song.paused ? ct : ct + Math.min(0.3, w - lastWall);
 }
-// The highlighter wipe: every animation frame, the line being sung is filled up to the word being sung. One loop per
-// playback: it ends when that playback does or pauses (a restart or resume starts its own)
+// The highlighter wipe and the pitch lane: every animation frame, the line being sung is filled up to the word being sung
+// and the lane moves on. One loop per playback: it ends when that playback does or pauses (a restart or resume starts its own)
 function paint(p, tok = p.paintTok = {}){
   if (play !== p || p.paintTok !== tok || p.paused) return;
-  wipe(p);
+  const t = clock(); wipe(p, t); drawLane(t);
   requestAnimationFrame(() => paint(p, tok));
 }
-function wipe(p){
+function wipe(p, t = clock()){
   if (!p.cur) return;
-  const t = clock(), x = sungTo(LINES[p.cur.line], t);
+  const x = sungTo(LINES[p.cur.line], t);
   for (const el of p.lyrs || []) el.style.setProperty("--w", Math.max(0, Math.min(el.dataset.t.length, x - el.dataset.o)) + "ch");
   for (const el of p.mels || []) el.classList.toggle("sung", t >= el.dataset.t - 0.02);
 }
@@ -462,6 +462,7 @@ function stopPlay(){
   if (out){ out.gain.setTargetAtTime(0, ac.currentTime, 0.02); setTimeout(() => out.disconnect(), 300); }
   song?.pause(); vox?.pause();
   playingUI(false); mark();
+  queueMicrotask(() => { if (!play) micStop(); });
 }
 function playingUI(on, paused){
   document.body.classList.toggle("playing", on);
@@ -483,6 +484,175 @@ function mode(){
 function backingButtons(){
   const m = mode();
   for (const [b, id] of Object.entries(BACKINGS)) $(id).setAttribute("aria-pressed", m === b);
+}
+
+// ---------- Pitch lane ----------
+// While Play runs (or pauses), a strip pinned in the toolbar shows the melody SingStar style: each note a bar as high as
+// its pitch and as long as it's held, scrolling right to left past a "now" line, with the words under them where they're
+// sung. The note being sung is highlighter yellow. Pitches are as they sound: in the sheet's key with Synth (it follows
+// transpose; the capo view sounds in the recording's key), the recording's with Recording. The Pitch lane toggle shows or
+// hides it (saved as chordpage-lane, on unless turned off); a page with no melody has none.
+// Mic (opt-in, each visit): the pitch you sing, as a dot at the now line and a trail behind it, in the octave nearest the
+// note (any octave counts); a note you sing within a semitone of stays lit. The microphone's sound goes only to a pitch
+// detector on this page (YIN, below), never recorded or sent, and the mic stops when Play stops or the page is hidden.
+const LANE_KEY = "chordpage-lane", MONO = getComputedStyle(document.body).getPropertyValue("--mono").trim() || "monospace";
+let laneOn = true;
+try { laneOn = localStorage.getItem(LANE_KEY) !== "0"; } catch {}
+const laneShown = () => laneOn && !!MEL;
+// A note name's pitch class, in either spelling (Db or C#)
+const pcOf = r => ({C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11}[r[0]] + (r[1] === "#") - (r[1] === "b") + 12) % 12;
+// Every sung word with its start and end, in song order, for the row under the notes
+const WORDS = [];
+for (const L of LINES) if (L.words) (L.text.match(/\S+/g) || []).forEach((s, k) => WORDS.push({t: L.words[k], e: L.words[k + 1], s}));
+// Where each word is drawn, as a song time d: when it's sung, or after the word before and a space, if that's later.
+// Worked out once per scale (pixels a second, the mono font's character width), so words never jump as the lane moves
+const wordsFor = {};
+function placeWords(pps, ch){
+  let free = -Infinity;
+  for (const w of WORDS){ w.d = Math.max(w.t, free); free = w.d + (w.s.length + 1) * ch / pps; }
+  Object.assign(wordsFor, {pps, ch});
+}
+// The first index in a time-sorted list at or after time t
+const firstFrom = (list, t, at) => { let lo = 0, hi = list.length; while (lo < hi){ const m = (lo + hi) >> 1; at(list[m]) < t ? lo = m + 1 : hi = m; } return lo; };
+const laneCv = $("laneCv"), lctx = laneCv.getContext("2d"), tokens = getComputedStyle(document.documentElement);
+let laneW = 0, laneH = 0;
+new ResizeObserver(() => {
+  const r = laneCv.getBoundingClientRect(), d = devicePixelRatio || 1; laneW = r.width; laneH = r.height;
+  laneCv.width = Math.round(laneW * d); laneCv.height = Math.round(laneH * d); lctx.setTransform(d, 0, 0, d, 0, 0);
+  if (play) drawLane(clock());
+}).observe(laneCv);
+// How far the lane's notes sit from the recording's: the synth plays in the sheet's key
+const laneShift = () => play?.out ? signed(sounding()) : 0;
+function drawLane(t){
+  if (!play || !laneShown() || !laneW) return;
+  const c = lctx, W = laneW, H = laneH, col = k => tokens.getPropertyValue(k).trim();
+  const fg = col("--fg"), muted = col("--muted"), mark = col("--mark"), ink = col("--mark-ink");
+  c.clearRect(0, 0, W, H);
+  // Pitch: the song's range and a semitone either side, one row per semitone above the words; time: at least 110 px a
+  // second (about 7 s across a desktop, 3 on a phone), with the now line a quarter of the way in
+  const up = laneShift(), lo = MEL.lo + up - 1, hi = MEL.hi + up + 1, words = 15, row = (H - words - 4) / (hi - lo + 1);
+  const y = m => H - words - (m - lo + 0.5) * row, pps = Math.max(110, W / 7), nowX = Math.max(60, W * 0.22);
+  const x = s => nowX + (s - t) * pps, t0 = t - nowX / pps, t1 = t + (W - nowX) / pps;
+  // Guides: a faint line at every C and at the key's home note, named at the left
+  const home = (pcOf(KEY.match(/^[A-G][b#]?/)[0]) + up + 12) % 12;
+  c.font = `500 10px ${MONO}`;
+  for (let m = lo; m <= hi; m++){ const pc = (m % 12 + 12) % 12; if (pc && pc !== home) continue;
+    c.globalAlpha = 0.25; c.fillStyle = muted; c.fillRect(0, Math.round(y(m)), W, 1);
+    c.globalAlpha = 0.8; c.textBaseline = y(m) > 12 ? "bottom" : "top"; c.fillText(noteName(m), 2, y(m) + (y(m) > 12 ? -1 : 2)); }
+  // The notes: past ones fade, the one being sung (and any the mic heard you hit) in highlighter yellow
+  const N = MEL.notes, bh = Math.max(5, Math.min(10, row * 1.4)), hits = play.hits;
+  for (let i = firstFrom(N, t0 - 5, n => n[0]); i < N.length && N[i][0] < t1; i++){
+    const [s, d, m] = N[i]; if (s + d < t0) continue;
+    const lit = (s <= t && t < s + d) || hits?.has(i), bx = x(s), by = y(m + up) - bh / 2, bw = Math.max(3, d * pps - 2);
+    c.globalAlpha = lit ? 1 : s + d < t ? 0.3 : 0.6; c.fillStyle = lit ? mark : muted;
+    c.beginPath(); c.roundRect ? c.roundRect(bx, by, bw, bh, bh / 2) : c.rect(bx, by, bw, bh); c.fill();
+    if (lit){ c.globalAlpha = 0.55; c.strokeStyle = ink; c.lineWidth = 1; c.stroke(); }
+  }
+  // The now line
+  c.globalAlpha = 0.45; c.fillStyle = fg; c.fillRect(nowX - 1, 0, 2, H - words);
+  // The words, every one, each where it's sung or just after the word before (a quick run of words drifts right of its
+  // notes until the next breath catches it up); the word being sung by its own timing
+  c.font = `500 11px ${MONO}`; c.textBaseline = "alphabetic";
+  const ch = c.measureText("0").width;
+  if (wordsFor.pps !== pps || wordsFor.ch !== ch) placeWords(pps, ch);
+  for (let i = firstFrom(WORDS, t0 - 8, w => w.d); i < WORDS.length && WORDS[i].d < t1; i++){
+    const w = WORDS[i], now = w.t <= t && t < w.e;
+    c.globalAlpha = now ? 1 : w.e <= t ? 0.4 : 0.85; c.fillStyle = now ? fg : muted;
+    c.fillText(w.s, x(w.d), H - 3);
+  }
+  // The mic: the trail of what you sang, and a dot for the latest (kept inside the lane's range)
+  if (mic){
+    if (!play.paused) listen(t);
+    const trail = play.trail || [], last = trail.at(-1), ym = m => y(Math.min(hi + 0.4, Math.max(lo - 0.4, m)));
+    for (const p of trail) if (p.t > t0){ c.globalAlpha = p.hit ? 0.9 : 0.5; c.fillStyle = p.hit ? mark : fg; c.fillRect(x(p.t) - 1.5, ym(p.m) - 1.5, 3, 3); }
+    if (last && t - mic.lag - last.t < 0.25){
+      c.globalAlpha = 1; c.fillStyle = last.hit ? mark : fg; c.strokeStyle = last.hit ? ink : col("--surface"); c.lineWidth = 1.5;
+      c.beginPath(); c.arc(x(last.t), ym(last.m), 5, 0, 7); c.fill(); c.stroke();
+    }
+  }
+  c.globalAlpha = 1;
+}
+function laneUI(){
+  $("tLane").hidden = !MEL; $("tLane").setAttribute("aria-pressed", laneOn);
+  $("lane").hidden = !laneShown();
+  if (!laneShown()) micStop();
+  else if (play) drawLane(clock());
+}
+$("tLane").onclick = () => { laneOn = !laneOn; try { localStorage.setItem(LANE_KEY, laneOn ? "1" : "0"); } catch {} laneUI(); };
+
+// The microphone, through the same audio graph as the backing: into an analyser that goes nowhere audible (a silent gain,
+// since some browsers only run nodes that reach the speakers)
+let mic = null, micWant = false, micNoteT = 0, micTry = null;
+const say = (msg, ms = 0) => { clearTimeout(micNoteT); $("micNote").textContent = msg; if (ms) micNoteT = setTimeout(() => { $("micNote").textContent = ""; }, ms); };
+async function micStart(){
+  if (!navigator.mediaDevices?.getUserMedia) return say("This browser can’t use a microphone here.", 5000);
+  const attempt = micTry = {}; micWant = true; $("mic").setAttribute("aria-pressed", "true");
+  // iOS: a page that records as well as plays says so, or the mic stays off
+  if (navigator.audioSession) navigator.audioSession.type = "play-and-record";
+  // The context, started inside this click; a paused synth's stays paused (it is the synth's clock)
+  if (!ac) audio(); else if (!(play?.paused && play.out)) ac.resume();
+  say("Mic on: it shows the pitch you sing and stays on this page. Nothing is recorded or sent. Headphones help: without them it hears the backing too.", 8000);
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: false, autoGainControl: false}}); }
+  catch (e){
+    if (attempt !== micTry) return;
+    micStop();
+    return say(e.name === "NotAllowedError" || e.name === "SecurityError" ? "The microphone is blocked. Allow it in the browser’s site settings to see your pitch."
+      : e.name === "NotFoundError" || e.name === "OverconstrainedError" ? "No microphone found." : "Couldn’t start the microphone.", 8000);
+  }
+  // Turned off (or on again), or Play stopped, while the browser asked
+  if (attempt !== micTry || !micWant || !play){ stream.getTracks().forEach(tr => tr.stop()); if (attempt === micTry) micStop(); return; }
+  const src = ac.createMediaStreamSource(stream), an = ac.createAnalyser(), mute = ac.createGain();
+  an.fftSize = 2048; mute.gain.value = 0; src.connect(an).connect(mute).connect(ac.destination);
+  // What you sing reaches the detector after the backing has left the speakers and come back through the mic: set the
+  // reading that much earlier in the song
+  const lag = Math.min(0.3, (ac.outputLatency || 0) + (ac.baseLatency || 0)) + 0.04;
+  mic = {stream, src, an, mute, lag, buf: new Float32Array(an.fftSize), d: new Float32Array(an.fftSize / 2), last: 0};
+  stream.getTracks().forEach(tr => { tr.onended = () => { if (mic?.stream === stream){ micStop(); say("The microphone stopped.", 5000); } }; });
+}
+function micStop(){
+  micWant = false; micTry = null; $("mic").setAttribute("aria-pressed", "false");
+  // (back to playing only, also when the browser was still asking or said no)
+  if (navigator.audioSession) navigator.audioSession.type = "playback";
+  if (!mic) return;
+  mic.stream.getTracks().forEach(tr => tr.stop()); mic.src.disconnect(); mic.mute.disconnect(); mic = null;
+}
+$("mic").hidden = !navigator.mediaDevices?.getUserMedia;
+$("mic").onclick = () => micWant ? (micStop(), say("")) : micStart();
+addEventListener("visibilitychange", () => { if (document.hidden) micStop(); });
+addEventListener("pagehide", micStop);
+// One reading about every 30 ms: the sung pitch, folded into the octave of the note being sung (or of the last reading)
+function listen(t){
+  const now = performance.now(); if (now - mic.last < 30) return; mic.last = now;
+  mic.an.getFloatTimeDomainData(mic.buf);
+  const f = yin(mic.buf, ac.sampleRate, mic.d); if (!f) return;
+  const at = t - mic.lag, up = laneShift(), N = MEL.notes, i = firstFrom(N, at + 1e-3, n => n[0]) - 1;
+  const cur = i >= 0 && at < N[i][0] + N[i][1] ? i : -1, trail = play.trail ||= [];
+  const ref = cur >= 0 ? N[cur][2] + up : trail.at(-1)?.m ?? (MEL.lo + MEL.hi) / 2 + up;
+  let m = 69 + 12 * Math.log2(f / 440); m += 12 * Math.round((ref - m) / 12);
+  const hit = cur >= 0 && Math.abs(m - ref) <= 1;
+  if (hit) (play.hits ||= new Set()).add(cur);
+  trail.push({t: at, m, hit});
+  while (trail.length && trail[0].t < at - 4) trail.shift();
+}
+// YIN (de Cheveigné and Kawahara, 2002): the period is the first lag where the signal best matches itself, judged by the
+// difference function normalized by its running mean; 0 when it's too quiet or nothing is clearly pitched. Voices sit
+// between about 70 and 1000 Hz
+function yin(x, sr, d){
+  let rms = 0; for (let j = 0; j < x.length; j++) rms += x[j] * x[j];
+  if (Math.sqrt(rms / x.length) < 0.01) return 0;
+  const n = x.length >> 1, lo = Math.floor(sr / 1000), hi = Math.min(n - 2, Math.ceil(sr / 70));
+  let sum = 0; d[0] = 1;
+  for (let tau = 1; tau <= hi + 1; tau++){
+    let s = 0; for (let j = 0; j < n; j++){ const v = x[j] - x[j + tau]; s += v * v; }
+    sum += s; d[tau] = sum ? s * tau / sum : 1;
+  }
+  for (let tau = lo; tau <= hi; tau++) if (d[tau] < 0.15){
+    while (tau < hi && d[tau + 1] < d[tau]) tau++;
+    const a = d[tau - 1], b = d[tau], c = d[tau + 1], den = a - 2 * b + c;
+    return sr / (tau + (den > 0 ? (a - c) / (2 * den) : 0));
+  }
+  return 0;
 }
 
 // Mix: the band (synth or recording) and the vocals, each 0–100
@@ -531,6 +701,7 @@ $("tMelody").onclick = () => {
   try { localStorage.setItem(MELODY_KEY, melodyOn ? "1" : "0"); } catch {}
   render();
 };
+laneUI();
 $("diag").onclick = () => { const on = $("diagrams").hidden; $("diagrams").hidden = !on; $("diag").setAttribute("aria-pressed", on); };
 // Re-wrap when the sheet's width changes (rotation, resizing), and once the mono font has loaded
 let lastW = 0;

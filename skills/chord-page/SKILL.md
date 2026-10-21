@@ -1,6 +1,6 @@
 ---
 name: chord-page
-description: Make a karaoke chord page for a song (chords over every lyric line, a synth and the hosted recording to play along with, the isolated vocals to blend in, a word-by-word highlighter wipe, the sung melody as a contour over the words) from its mp3 and lyrics. Use when asked for chords, a chord chart, a karaoke page or a play-along page for a song, or given an mp3 to turn into one.
+description: Make a karaoke chord page for a song (chords over every lyric line, a synth and the hosted recording to play along with, the isolated vocals to blend in, a word-by-word highlighter wipe, the sung melody as a contour over the words and as a scrolling pitch lane with an optional mic) from its mp3 and lyrics. Use when asked for chords, a chord chart, a karaoke page or a play-along page for a song, or given an mp3 to turn into one.
 ---
 
 # Chord page
@@ -22,6 +22,15 @@ What the page does (all in `assets/karaoke.js`; the only per-song settings are t
   fills in highlighter yellow as the note is sung. Hovering a dash names the note (in the sheet's key, so it follows
   transpose). A **Melody** toggle shows or hides it (saved as `chordpage-melody`, on by default); it hides itself on a page
   with no melody file. The notes come from the vocals stem, so they're a reading of the recording, like the chords.
+- **Pitch lane**, SingStar style, from the same notes: while Play runs (or pauses), a strip pinned in the toolbar (on
+  phones too, with Listen and Mix) scrolls the notes right to left past a "now" line, each a bar as high as its pitch
+  and as long as it's held, with the words underneath and the note being sung in highlighter yellow. It follows the
+  song's clock, so it holds still on pause and jumps with a line tap, a loop or a backing change; its pitches follow
+  transpose with Synth and are the recording's with Recording. A **Pitch lane** toggle (saved as `chordpage-lane`, on by
+  default) shows or hides it, and it hides itself with no melody file. Its **Mic** button (opt-in, never saved) shows
+  the pitch you sing as a dot and a trail at the now line (YIN pitch detection on the page's own audio graph, in any
+  octave), lighting each note you sing within a semitone of. Nothing is recorded or sent; it stops when Play stops or
+  the page is hidden, and asks for headphones, since a mic near speakers hears the backing.
 
 - Chords over every lyric line, transpose, a capo view in open shapes, text size, auto-scroll, and chord diagrams: a
   row at the top, and a popup when you hover a chord (or tap one on a touch screen while nothing plays). Both follow
@@ -148,3 +157,8 @@ Host the audio only with the artist's OK (step 0).
   (`--melody-only` on the hosted vocals stem): pyin's voicing probability sat around 0.1 even mid-line on these Suno
   vocals, so gating on it kept only 14% of the sung time; its voiced flag plus a loudness floor kept 76%. Notes under
   0.1 s touching a longer one were slides, folded into it (709 notes to 648, 70% covered, range G3–B4).
+- Pitch lane and mic (Oct 2026): a MediaStream made by another AudioContext reads as silence in the Claude desktop
+  app's browser pane, so to test the mic path there, stub the page's `createMediaStreamSource` to return an oscillator
+  in the same context. YIN finds a sung pitch to well under a cent in about 1 ms per 2048-sample reading, so a reading
+  every 30 ms costs nothing on a phone. Mic timing (the backing's output latency plus the mic's) can only be judged on
+  a real phone with headphones.

@@ -92,6 +92,15 @@ body.playing .cline{cursor:pointer}
 .mel{display:block;position:relative;height:var(--melh,1.6em);margin:3px 0 4px}
 .mel i{position:absolute;left:calc(var(--a)*1ch);width:calc(var(--n)*1ch - 2px);bottom:calc(var(--y)*(100% - 4px));height:4px;border-radius:2px;background:color-mix(in srgb,var(--muted) 65%,transparent)}
 .mel i.sung{background:var(--mark);box-shadow:0 0 0 1px color-mix(in srgb,var(--mark-ink) 55%,transparent)}
+/* Pitch lane (karaoke.js draws it on the canvas): a row of the toolbar while playing, so it pins with it and never covers
+   the sheet or the video; the Mic button beside it, and the mic's messages over the far end of the lane, clear of the now line */
+.lane{display:none;flex:1 0 100%;position:relative;gap:8px;align-items:center;border-top:1px solid var(--line);padding-top:6px}
+body.playing .lane{display:flex}
+.lane canvas{flex:1;min-width:0;height:104px;display:block}
+.micbtn{display:inline-flex;align-items:center;gap:5px}
+.micbtn svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.micnote{position:absolute;right:76px;top:10px;max-width:min(52ch,62%);margin:0;padding:5px 9px;font-size:12.5px;line-height:1.4;background:var(--surface);border:1px solid var(--line);border-radius:6px;pointer-events:none}
+.micnote:empty{display:none}
 /* Loop: an icon toggle beside Play, highlighter yellow when on */
 .loopbtn{display:inline-flex;align-items:center;padding:6px 8px;margin-left:4px}
 .loopbtn svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
@@ -102,9 +111,10 @@ body.playing .cline{cursor:pointer}
 /* A switch whose last button is hidden rounds the one before it */
 .seg .minibtn:has(+ [hidden]:last-child){border-radius:0 6px 6px 0}
 /* Phones: the toolbar wraps to several rows, too tall to pin, so it scrolls away with the page (a touch stops auto-scroll),
-   except while playing, when it pins with just Listen and Mix, so Stop and the volumes stay in reach */
+   except while playing, when it pins with just Listen, Mix and the pitch lane, so Pause and the volumes stay in reach */
 @media (max-width:560px){.sheet{padding:4px 12px 20px}.chordbar{position:static}.chordbar .wrap{gap:6px 12px}body.playing .chordbar{position:sticky}
-  body.playing .chordbar .cgrp:not(.live){display:none}}
+  body.playing .chordbar .cgrp:not(.live){display:none}
+  .lane canvas{height:84px}.micbtn{padding:6px 8px}.micbtn span{display:none}.micnote{right:48px;top:4px}}
 
 /* Standalone only */
 @media (max-width:960px){.htop{grid-template-columns:minmax(0,1fr)}}

@@ -47,9 +47,10 @@
   <div class="cgrp"><span>Easy shapes</span><button class="minibtn" id="capo" aria-pressed="false">Capo</button></div>
   <div class="cgrp"><span>Size</span><button class="minibtn" id="fDown" aria-label="Smaller text">A−</button><button class="minibtn" id="fUp" aria-label="Larger text">A+</button></div>
   <div class="cgrp"><span>Scroll</span><button class="minibtn" id="scroll" aria-pressed="false">▶ Auto-scroll</button><input id="speed" type="range" min="1" max="10" value="3" aria-label="Scroll speed"></div>
-  <div class="cgrp"><span>Show</span><button class="minibtn" id="diag" aria-pressed="true">Chord diagrams</button><button class="minibtn" id="tMelody" aria-pressed="false" hidden>Melody</button>
+  <div class="cgrp"><span>Show</span><button class="minibtn" id="diag" aria-pressed="true">Chord diagrams</button><button class="minibtn" id="tMelody" aria-pressed="false" hidden>Melody</button><button class="minibtn" id="tLane" aria-pressed="false" hidden>Pitch lane</button>
   </div>
   <div class="cgrp"><span>Fingering</span><span class="seg" role="group" aria-label="Chord shape level"><button class="minibtn" data-shape="easy" aria-pressed="false">Beginner</button><button class="minibtn" data-shape="std" aria-pressed="true">Standard</button><button class="minibtn" data-shape="adv" aria-pressed="false">Advanced</button></span></div>
+  <div class="lane" id="lane" hidden><canvas id="laneCv" aria-hidden="true"></canvas><button class="minibtn micbtn" id="mic" aria-pressed="false" title="Show the pitch you sing, from your microphone. It stays on this page: nothing is recorded or sent. Wear headphones, or it hears the backing too"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span>Mic</span></button><p class="micnote" id="micNote" aria-live="polite"></p></div>
 </div></div>
 
 <main class="wrap chordmain">
