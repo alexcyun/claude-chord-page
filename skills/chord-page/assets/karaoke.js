@@ -529,9 +529,10 @@ function drawLane(t){
   const fg = col("--fg"), muted = col("--muted"), mark = col("--mark"), ink = col("--mark-ink");
   c.clearRect(0, 0, W, H);
   // Pitch: the song's range and a semitone either side, one row per semitone above the words; time: at least 110 px a
-  // second (about 7 s across a desktop, 3 on a phone), with the now line a quarter of the way in
+  // second (about 7 s across a desktop, 3 on a phone), with the now line a third of the way in, so what was just sung
+  // (and the mic's trail) has room behind it
   const up = laneShift(), lo = MEL.lo + up - 1, hi = MEL.hi + up + 1, words = 15, row = (H - words - 4) / (hi - lo + 1);
-  const y = m => H - words - (m - lo + 0.5) * row, pps = Math.max(110, W / 7), nowX = Math.max(60, W * 0.22);
+  const y = m => H - words - (m - lo + 0.5) * row, pps = Math.max(110, W / 7), nowX = Math.max(60, W / 3);
   const x = s => nowX + (s - t) * pps, t0 = t - nowX / pps, t1 = t + (W - nowX) / pps;
   // Guides: a faint line at every C and at the key's home note, named at the left
   const home = (pcOf(KEY.match(/^[A-G][b#]?/)[0]) + up + 12) % 12;
@@ -539,11 +540,13 @@ function drawLane(t){
   for (let m = lo; m <= hi; m++){ const pc = (m % 12 + 12) % 12; if (pc && pc !== home) continue;
     c.globalAlpha = 0.25; c.fillStyle = muted; c.fillRect(0, Math.round(y(m)), W, 1);
     c.globalAlpha = 0.8; c.textBaseline = y(m) > 12 ? "bottom" : "top"; c.fillText(noteName(m), 2, y(m) + (y(m) > 12 ? -1 : 2)); }
-  // The notes: past ones fade, the one being sung (and any the mic heard you hit) in highlighter yellow
+  // The notes: past ones fade, the one being sung (and any the mic heard you hit) in highlighter yellow. A note past the
+  // song's range (it spans most notes, not the odd outlier) sits on its edge row, and no bar reaches down into the words
   const N = MEL.notes, bh = Math.max(5, Math.min(10, row * 1.4)), hits = play.hits;
+  const barY = m => Math.max(0, Math.min(H - words - 3 - bh, y(Math.min(hi, Math.max(lo, m))) - bh / 2));
   for (let i = firstFrom(N, t0 - 5, n => n[0]); i < N.length && N[i][0] < t1; i++){
     const [s, d, m] = N[i]; if (s + d < t0) continue;
-    const lit = (s <= t && t < s + d) || hits?.has(i), bx = x(s), by = y(m + up) - bh / 2, bw = Math.max(3, d * pps - 2);
+    const lit = (s <= t && t < s + d) || hits?.has(i), bx = x(s), by = barY(m + up), bw = Math.max(3, d * pps - 2);
     c.globalAlpha = lit ? 1 : s + d < t ? 0.3 : 0.6; c.fillStyle = lit ? mark : muted;
     c.beginPath(); c.roundRect ? c.roundRect(bx, by, bw, bh, bh / 2) : c.rect(bx, by, bw, bh); c.fill();
     if (lit){ c.globalAlpha = 0.55; c.strokeStyle = ink; c.lineWidth = 1; c.stroke(); }
@@ -560,10 +563,11 @@ function drawLane(t){
     c.globalAlpha = now ? 1 : w.e <= t ? 0.4 : 0.85; c.fillStyle = now ? fg : muted;
     c.fillText(w.s, x(w.d), H - 3);
   }
-  // The mic: the trail of what you sang, and a dot for the latest (kept inside the lane's range)
+  // The mic: the trail of what you sang, and a dot for the latest (kept inside the lane's range, and its 5 px dot clear of
+  // the words and the canvas's top)
   if (mic){
     if (!play.paused) listen(t);
-    const trail = play.trail || [], last = trail.at(-1), ym = m => y(Math.min(hi + 0.4, Math.max(lo - 0.4, m)));
+    const trail = play.trail || [], last = trail.at(-1), ym = m => Math.max(7, Math.min(H - words - 7, y(Math.min(hi + 0.4, Math.max(lo - 0.4, m)))));
     for (const p of trail) if (p.t > t0){ c.globalAlpha = p.hit ? 0.9 : 0.5; c.fillStyle = p.hit ? mark : fg; c.fillRect(x(p.t) - 1.5, ym(p.m) - 1.5, 3, 3); }
     if (last && t - mic.lag - last.t < 0.25){
       c.globalAlpha = 1; c.fillStyle = last.hit ? mark : fg; c.strokeStyle = last.hit ? ink : col("--surface"); c.lineWidth = 1.5;
