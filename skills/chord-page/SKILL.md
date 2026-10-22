@@ -147,7 +147,10 @@ Host the audio only with the artist's OK (step 0).
 - End of the Show (Oct 2026): the tempo drifts 123.6 → 127.5 BPM, so a fixed grid gave near-random chords; beat
   tracking fixed it. Averaged pitch class profiles called it D minor (its V chord and melody lean on D); choosing the
   key from the decoded chords got G minor. YouTube's creator subtitles had exact line times, but word-level
-  auto-captions matched to the lyrics are enough on their own (97% of words matched).
+  auto-captions matched to the lyrics are enough on their own (97% of words matched). Its melody came later
+  (`--melody-only` on the hosted vocals stem, which found the page by its data file, since it predates the
+  `<slug>-chords.html` name): the Simulation's voicing fix carried over unchanged, 832 notes across C3–F4, 73% covered,
+  59% on chord notes, almost all in G minor's scale and only 3 octave jumps.
 - The Simulation's Ending (Oct 2026): no published lyrics or creator subtitles, so the words came from the video's
   on-screen lyrics in YouTube's 320×180 storyboard (`yt-dlp -f sb0`, then unpack the mhtml's 3×3 tiles), with the
   auto-captions only for line breaks and a few lines no frame caught. 91% of words matched; numbers sung as words
