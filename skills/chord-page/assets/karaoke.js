@@ -28,11 +28,15 @@ const tr = ch => ch.replace(/^([A-G][b#]?)/, r => NOTES[(NOTES.indexOf(r) + shif
 const capo = () => capoOn;
 
 // How many characters of the sheet's mono text fit on one row, so long lines can wrap (phones)
-function columns(sheet){
+function charWidth(sheet){
   const probe = document.createElement("pre"); probe.className = "cline"; probe.style.cssText = "position:absolute;visibility:hidden";
   probe.textContent = "0".repeat(40); sheet.append(probe);
-  const ch = probe.getBoundingClientRect().width / 40, cs = getComputedStyle(sheet); probe.remove();
-  return Math.max(16, Math.floor((sheet.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) / ch));
+  const ch = probe.getBoundingClientRect().width / 40; probe.remove();
+  return ch;
+}
+function columns(sheet){
+  const cs = getComputedStyle(sheet);
+  return Math.max(16, Math.floor((sheet.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) / charWidth(sheet)));
 }
 // A line too long for the row splits, Ultimate Guitar style, each piece with the chords over its own words: after a
 // sentence or clause end if one falls past a third of the row, else after the last word that fits. Chords past the words
