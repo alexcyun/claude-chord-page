@@ -101,7 +101,8 @@ A page made before melodies existed gets one without touching its other files: p
 
 The script prints:
 
-- **words matched** (aim for 90%+) and weak lines. A weak line usually means the lyrics file differs from what's sung
+- **words matched** (aim for 90%+; misheard words still take the misheard words' times, and words the transcript left
+  out go on the sung notes) and weak lines. A weak line usually means the lyrics file differs from what's sung
   (a repeat left out, an ad-lib), or the transcript missed a quiet passage. Fix the lyrics first.
 - **melody on chord notes**: about 65% is typical for pop; near 55% means the chords are no better than one held chord
   (wrong grid, wrong key, or a song the templates don't fit).
@@ -160,6 +161,7 @@ Host the audio only with the artist's OK (step 0).
   (`--melody-only` on the hosted vocals stem): pyin's voicing probability sat around 0.1 even mid-line on these Suno
   vocals, so gating on it kept only 14% of the sung time; its voiced flag plus a loudness floor kept 76%. Notes under
   0.1 s touching a longer one were slides, folded into it (709 notes to 648, 70% covered, range G3–B4).
+- I'm Upping My P(doom), Claude-Pop (Oct 2026): a Suno song at a steady 132 BPM, each chord held two bars. The bass stem changed exactly on the decoded grid, yet melody on chord notes scored 54%, the "no better than one chord" mark: the melody leads into each change about three beats early, so scoring it against chords shifted 1.4 s earlier gave 63%. Before trusting a low score, print the bass stem's pitch class per beat and score a few grid shifts. The loop summary under the key used to count bars ("Eb, Bb, Bb, Cm"); it now counts chord changes. The two-beat chord before each chorus decoded as Dm7b5 over a D bass, but the backing there is a chromatic riser (D, C#, Eb, E), so it's written Bb (Bb/D). To check chord qualities, average the `other` stem's CQT from C3 up, in dB, over every half bar of each chord: it showed Fm7 where the decoder said Fm, and the loop voiced as maj7 chords (a stray tritone, like A over Eb, is the maj7's overtone). Edit the cached `bars.json` and rerun into a scratch `--site` copy to re-place the chords over the words, then carry over hand fixes. Words matched only 78%: the captions heard "upping my P(doom)" as "up in my bedroom" and "Shinigami eyes" as "shining got me high", and unmatched words used to be spread evenly to the next match, so "Shinigami eyes" ran five seconds too long. Now a misheard run takes the times of the words heard in its place (by syllable share), and words the captions left out go on the sung notes' starts, a note per syllable; the captions' `[music]` markers are dropped. It was first built with `--no-media` while only the lyrics were OK'd; when the audio was cleared, the two mp3s were encoded from the cached stems with `build()`'s ffmpeg commands and named in `KARAOKE_SONG`, since a rerun rewrites the data files and would drop hand fixes.
 - Pitch lane and mic (Oct 2026): a MediaStream made by another AudioContext reads as silence in the Claude desktop
   app's browser pane, so to test the mic path there, stub the page's `createMediaStreamSource` to return an oscillator
   in the same context. YIN finds a sung pitch to well under a cent in about 1 ms per 2048-sample reading, so a reading

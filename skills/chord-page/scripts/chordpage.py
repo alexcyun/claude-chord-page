@@ -15,7 +15,9 @@
 #   3. chords    one chord per half bar from the bass and other stems (chroma against major, minor, 7 and m7b5 templates,
 #                a small bonus for chords in the song's key), smoothed with Viterbi so chords change on strong beats
 #   4. words     word start times: YouTube's word-timed auto-captions (--yt), or faster-whisper on the vocals (--whisper)
-#   5. align     the lyrics' words matched to those words (difflib over the whole song); unmatched words interpolated
+#   5. align     the lyrics' words matched to those words (difflib over the whole song); misheard words take the times of
+#                what was heard in their place, and words left out go on the sung notes between (stage 6's), a note per
+#                syllable, or are spread evenly where there are too few
 #   6. melody    the sung notes, tracked on the vocals stem with pyin and cut into notes where the pitch holds steady
 #   7. build     index.html, karaoke.js, chordpage.css, karaoke-SLUG.js, bars-SLUG.js, melody-SLUG.js and (unless
 #                --no-media) media/SLUG-instrumental.mp3 and media/SLUG-vocals.mp3
@@ -124,8 +126,11 @@ def chords(st, work, bt, forced_key=None):
     for s in range(phase, n, 4):
         h1 = ch[s]; h2 = ch[s + 2] if s + 2 < n else h1
         bars.append([round(float(b[s]), 2), h1] + ([h2] if h2 != h1 else []))
-    if phase:   # beats before the first downbeat: a short bar of their own
-        bars.insert(0, [round(float(b[0]), 2), ch[0]])
+    if phase:   # beats before the first downbeat: a pickup bar of their own, a full bar long, since the player times its
+        # count-in by the bar's length (a 0.5 s bar gave four clicks in 0.5 s); one the song's start would cut under half a
+        # bar is left out, and the count-in uses the first full bar
+        bar = float(b[phase + 4] - b[phase]) if phase + 4 < n else 4 * float(np.median(np.diff(b)))
+        if b[phase] - bar > -bar / 2: bars.insert(0, [round(max(0.0, float(b[phase]) - bar), 2), ch[0]])
     end = round(float(b[-1] + np.median(np.diff(b))), 2)
     out = {"key": key, "bars": bars, "end": end}
     f.write_text(json.dumps(out)); return out
@@ -174,13 +179,28 @@ def read_lyrics(path):
 
 def align(secs, asr):
     norm = lambda w: re.sub(r"[^a-z0-9]", "", w.lower().replace("’", "'"))
+    asr = [a for a in asr if not re.search(r"\[\w+\]", a[1])]   # the transcript's [music] and [applause] aren't words
     flat = [(si, li, m.start(), m.group()) for si, s in enumerate(secs) for li, l in enumerate(s["lines"]) for m in re.finditer(r"\S+", l)]
     sm = difflib.SequenceMatcher(None, [norm(w) for *_, w in flat], [norm(w) for _, w in asr], autojunk=False)
     times = [None] * len(flat)
     for a, b, n in sm.get_matching_blocks():
         for k in range(n): times[a + k] = asr[b + k][0]
     matched = sum(t is not None for t in times)
-    # Unmatched words: spread between the nearest matched words on either side, by word count
+    # Words the transcript misheard ("up in my bedroom" for "upping my P(doom)") still have the misheard words' times:
+    # a run of lyrics between matches takes the times of the transcript's words in its place, by syllable position
+    # (each lyric word takes the heard word starting nearest the same share of the run's syllables; a second lyric word
+    # landing on the same heard word, like "thousand" on "100,000", is left for the sung notes)
+    def shares(ws):
+        n = [syllables(w) for w in ws]; tot = sum(n); return [sum(n[:k]) / tot for k in range(len(n))]
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag != "replace": continue
+        heard = shares([w for _, w in asr[j1:j2]]); used = set()
+        for k, f in zip(range(i1, i2), shares([w for *_, w in flat[i1:i2]])):
+            h = min(range(len(heard)), key=lambda x: abs(heard[x] - f))
+            if h not in used: times[k] = asr[j1 + h][0]; used.add(h)
+    timed = [t is not None for t in times]
+    # Words the transcript left out: spread between the nearest timed words on either side, by word count (snap() later
+    # moves them onto the sung notes where it can)
     known = [i for i, t in enumerate(times) if t is not None]
     if not known: sys.exit("align: no lyric words matched the transcript; check the lyrics or the transcript source")
     for i in range(len(times)):
@@ -190,11 +210,59 @@ def align(secs, asr):
             elif hi is None: times[i] = times[lo] + 0.3 * (i - lo)
             else: times[i] = times[lo] + (times[hi] - times[lo]) * (i - lo) / (hi - lo)
     for i in range(1, len(times)): times[i] = max(times[i], times[i - 1] + 0.05)
-    per, hits, kset = {}, {}, set(known)
+    per, hits, kset, exact = {}, {}, {}, {i for a, _, n in sm.get_matching_blocks() for i in range(a, a + n)}
     for i, ((si, li, at, w), t) in enumerate(zip(flat, times)):
         per.setdefault((si, li), []).append((at, w, t))      # (character index, word, start time) per word
-        hits.setdefault((si, li), []).append(i in kset)       # whether each word matched the transcript
-    return per, hits, matched, len(flat)
+        hits.setdefault((si, li), []).append(i in exact)      # whether each word matched the transcript
+        kset.setdefault((si, li), []).append(timed[i])        # whether the transcript timed it (matched or misheard)
+    return per, hits, matched, len(flat), kset
+
+
+def syllables(w):
+    # A rough count, for placing words on sung notes: a capital not starting a word ("AGI", the "GPT" of "ChatGPT", the
+    # "P" of "P(doom)") is a letter of its own, as is each letter of a word with no vowels ("cdr"), a number is one or
+    # two, and the rest one per group of vowels (a silent final e doesn't count)
+    w = re.sub(r"['’][a-z]+", "", w)   # a contraction's tail ('ll, 'm, 's) adds none
+    n, rest = 0, w
+    for m in re.findall(r"[A-Z]+(?![a-z])", w): n += len(m)
+    rest = re.sub(r"[A-Z]+(?![a-z])", " ", w)
+    n += sum(1 if len(d) == 1 else 2 for d in re.findall(r"\d+", rest))
+    for part in re.findall(r"[A-Za-z]+", rest):
+        p = part.lower(); v = len(re.findall(r"[aeiouy]+", p)) or len(p)   # no vowels ("cdr"): spelled out
+        if v > 1 and p.endswith("e") and not p.endswith("le"): v -= 1
+        n += v
+    return max(1, n)
+
+
+def snap(per, timed, mel):
+    # Words the transcript left out were spread evenly between the timed words around them, which goes wrong when the
+    # singer stretches a word or the next timed word is lines away. Put them on the sung notes instead: each takes as many
+    # note starts as it has syllables, after the notes of the word before them (counted from the note nearest its time,
+    # since a transcript runs a little early or late), and all must fit before the next timed word. Notes under 0.12 s are
+    # slides between notes, not syllables. A run with too few notes keeps its even spread. Returns how many words moved
+    keys = sorted(per); words = [(k, j) for k in keys for j in range(len(per[k]))]
+    ok = [timed[k][j] for k, j in words]; t = [per[k][j][2] for k, j in words]
+    starts = [s for s, d, _ in mel if d >= 0.12]; moved = 0
+    i = 0
+    while i < len(words):
+        if ok[i]: i += 1; continue
+        e = i
+        while e < len(words) and not ok[e]: e += 1
+        if i > 0 and e < len(words):
+            a, b = t[i - 1], t[e]
+            prev = syllables(per[words[i - 1][0]][words[i - 1][1]][1])
+            near = [x for x, s in enumerate(starts) if abs(s - a) <= 0.25 and s < b - 0.1]
+            if near: j = min(near, key=lambda x: abs(starts[x] - a)); on = [s for s in starts[j + prev:] if s < b - 0.1]
+            else: on = [s for s in starts if a + 0.1 < s < b - 0.1][prev - 1:]
+            need = [syllables(per[k][j][1]) for k, j in words[i:e]]
+            if len(on) >= sum(need):
+                pos = 0
+                for n, x in zip(need, range(i, e)): t[x] = on[pos]; pos += n
+                moved += e - i
+        i = e
+    for x, (k, j) in enumerate(words):
+        at, w, _ = per[k][j]; per[k][j] = (at, w, round(t[x], 2))
+    return moved
 
 
 # ---------- 6. melody ----------
@@ -318,12 +386,17 @@ def easy_capo(chord_list):
 
 
 def common_loop(bars, starts):
-    # The most frequent run of four bars starting where a sung line does (so it reads as a phrase, not a slice across
-    # two), for the line under the key
+    # The most frequent run of four chords starting where a sung line does (so it reads as a phrase, not a slice across
+    # two), for the line under the key. A chord held for several bars counts once, so a song that changes every two
+    # bars reads "Eb, Bb, Cm, Ab", not "Eb, Bb, Bb, Cm"
     seq, runs = [b[1] for b in bars], {}
     first = sorted({max(0, max((i for i, b in enumerate(bars) if b[0] <= t + 0.6), default=0)) for t in starts})
     for i in first:
-        r = tuple(seq[i:i + 4])
+        r = []
+        for c in seq[i:]:
+            if len(r) == 4: break
+            if not r or c != r[-1]: r.append(c)
+        r = tuple(r)
         if len(r) == 4 and len(set(r)) > 1: runs[r] = runs.get(r, 0) + 1
     if not runs: return ""
     r, n = max(runs.items(), key=lambda x: x[1])
@@ -544,8 +617,9 @@ def main():
     ch = chords(st, work, bt, args.key); log(f"chords: {len(ch['bars'])} bars, key {ch['key']}")
     asr = words(args, st, work); log(f"words: {len(asr)} from the transcript")
     secs = read_lyrics(args.lyrics)
-    per, hits, matched, total = align(secs, asr)
+    per, hits, matched, total, timed = align(secs, asr)
     mel = melody(st / "vocals.wav", work); log(f"melody: {len(mel)} notes")
+    log(f"words: {snap(per, timed, mel)} the transcript left out placed on sung notes")
     K, capo, key, mstat = build(args, st, bt, ch, secs, per, hits, mel)
     if args.out: log(f"built: {args.out}/index.html (key {key}, capo {capo}); serve it with: npx serve {args.out}")
     if not args.no_report: report(st, ch, K, matched, total, hits, secs, mstat)
