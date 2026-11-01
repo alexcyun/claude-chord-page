@@ -684,6 +684,20 @@ $("play").onclick = () => {
   const lines = [...$("sheet").querySelectorAll("pre[data-l]")], top = $("chordbar").getBoundingClientRect().bottom;
   startPlay(+(lines.find(el => el.getBoundingClientRect().bottom > Math.max(0, top)) || lines[0]).dataset.l);
 };
+// Space is the Play button (start, pause, resume), except while typing, in a dialog or on a button reached with Tab,
+// where it keeps its own meaning. A button or slider last clicked loses focus instead, so Space doesn't press it too
+// (not :focus-visible, which Chrome turns on for any focused button as soon as a key is pressed)
+let tabbed = false;
+addEventListener("pointerdown", () => { tabbed = false; }, true);
+addEventListener("keydown", e => {
+  if (e.key === "Tab") tabbed = true;
+  if (e.key !== " " || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t.closest?.("textarea, select, [contenteditable], dialog, input:not([type=range])") || (tabbed && t.matches?.("button"))) return;
+  if (t.matches?.("button, input")) t.blur();
+  e.preventDefault();   // a held Space doesn't scroll either
+  if (!e.repeat) $("play").click();
+});
 $("sheet").addEventListener("click", e => {
   const pre = e.target.closest("pre[data-l]");
   if (pre && !getSelection().toString()) startPlay(+pre.dataset.l);
@@ -691,7 +705,7 @@ $("sheet").addEventListener("click", e => {
 const hold = () => { followAfter = performance.now() + 4000; };
 addEventListener("wheel", hold, {passive: true});
 addEventListener("touchstart", hold, {passive: true});
-addEventListener("keydown", e => { if (/^(Arrow(Up|Down)|Page(Up|Down)|Home|End| )$/.test(e.key)) hold(); });
+addEventListener("keydown", e => { if (/^(Arrow(Up|Down)|Page(Up|Down)|Home|End)$/.test(e.key)) hold(); });
 $("tUp").onclick = () => { shift = (shift + 1) % 12; capoOn = false; render(); };
 $("tDown").onclick = () => { shift = (shift + 11) % 12; capoOn = false; render(); };
 $("capo").onclick = () => { capoOn = !capoOn; shift = capoOn ? (12 - SONG.capo) % 12 : 0; render(); };
