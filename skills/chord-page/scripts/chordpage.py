@@ -5,8 +5,9 @@
 # song's data and media/) that any static server can host.
 #
 #   python chordpage.py SONG.mp3 --slug my-song --title "My Song" --artist "Someone" --lyrics lyrics.txt --out DIR
-#                       [--yt YOUTUBE_ID | --whisper] [--stems DIR] [--work DIR] [--released "Oct 2, 2026"]
-#                       [--permission " (shared with their permission)" | --own] [--key Gm] [--capo N] [--no-media]
+#                       [--yt YOUTUBE_ID] [--whisper] [--stems DIR] [--work DIR] [--released "Oct 2, 2026"]
+#                       [--permission " (shared with their permission)" | --own] [--key Gm] [--capo N] [--phase N]
+#                       [--no-media] [--about "the line under the key"] [--half-time] [--evidence]
 #
 # Stages, each cached in the work dir (delete a file there to redo that stage):
 #   1. stems     demucs htdemucs splits the song into bass, drums, other and vocals (or --stems gives existing ones)
@@ -14,7 +15,8 @@
 #                the harmony changes most often
 #   3. chords    one chord per half bar from the bass and other stems (chroma against major, minor, 7 and m7b5 templates,
 #                a small bonus for chords in the song's key), smoothed with Viterbi so chords change on strong beats
-#   4. words     word start times: YouTube's word-timed auto-captions (--yt), or faster-whisper on the vocals (--whisper)
+#   4. words     word start times: YouTube's word-timed auto-captions (--yt), faster-whisper on the vocals (--whisper),
+#                or both (the captions first, whisper's for what they didn't hear)
 #   5. align     the lyrics' words matched to those words (difflib over the whole song); misheard words take the times of
 #                what was heard in their place, and words left out go on the sung notes between (stage 6's), a note per
 #                syllable, or are spread evenly where there are too few
@@ -25,7 +27,8 @@
 # melody file and its script tag on the page (its other files are left as they are):
 #   python chordpage.py VOCALS.mp3 --melody-only --slug my-song [--out DIR]
 # Then it prints a report: words matched, lines that matched poorly, how often the sung melody falls on the chord's notes
-# (about 65% is good for a pop song; a single chord held all song scores about 55%), and the roughest stretches.
+# (about 65% is good for a pop song; a single chord held all song scores about 55%, and so does a rap), and the roughest
+# stretches. --evidence adds each bar's bass and backing notes, for judging a chord that strays from the song's loop.
 #
 # Lyrics file: the sung lines in order, repeats written out, one per row; "[Section]" starts a section. Blank rows are
 # ignored.
@@ -34,6 +37,13 @@ from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent.parent   # the skill's folder: the template and assets/
 NOTES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+SHARPS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+def pc(root): return ({"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}[root[0]] + root[1:].count("#") - root[1:].count("b")) % 12
+def spell(c, key):
+    # A chord as song books write it in this key: sharps in G, D, A, E, B and F# major and Em, Bm, F#m, C#m and G#m
+    # (C#m's V is G#, not Ab), flats elsewhere. Decoding uses NOTES' names; this is for what the page prints
+    sharp = pc(key.rstrip("m")) in ([4, 11, 6, 1, 8] if key.endswith("m") else [7, 2, 9, 4, 11, 6])
+    m = re.match(r"([A-G][b#]?)(.*)", c); return (SHARPS if sharp else NOTES)[pc(m[1])] + m[2]
 QUAL = {"": ([0, 4, 7], 0), "m": ([0, 3, 7], 0), "7": ([0, 4, 7, 10], .06), "m7b5": ([0, 3, 6, 10], .06)}
 
 
@@ -75,17 +85,18 @@ def beats(st, work):
 # ---------- 3. chords ----------
 def in_key(key):
     # Chords that belong (diatonic, plus the major V and V7 of a minor key), which get a small bonus
-    r = NOTES.index(key.rstrip("m")); n = lambda i: NOTES[(r + i) % 12]
+    r = pc(key.rstrip("m")); n = lambda i: NOTES[(r + i) % 12]
     if key.endswith("m"):
         return {n(0) + "m", n(5) + "m", n(7) + "m", n(7), n(7) + "7", n(3), n(8), n(10), n(2) + "m7b5", n(2) + "m"}
     return {n(0), n(2) + "m", n(4) + "m", n(5), n(7), n(7) + "7", n(9) + "m", n(11) + "m7b5", n(2) + "7", n(4) + "7"}
 
 
-def chords(st, work, bt, forced_key=None):
+def chords(st, work, bt, forced_key=None, forced_phase=None):
     f = work / "bars.json"
     if f.exists():
-        cached = json.loads(f.read_text())
-        if not forced_key or cached["key"] == forced_key: return cached   # a different --key decodes again
+        cached = json.loads(f.read_text())   # a different --key or --phase decodes again, as does a cache from before phases
+        if "phase" in cached and (not forced_key or cached["key"] == forced_key) and (forced_phase is None or cached["phase"] == forced_phase):
+            return cached
     import numpy as np, librosa
     sr, hop = 22050, 512
     b = np.array(bt["beats"])
@@ -99,6 +110,15 @@ def chords(st, work, bt, forced_key=None):
     # Downbeats: the beat (mod 4) where the harmony changes most
     nov = np.r_[0, np.linalg.norm(np.diff(np.c_[On, Bn], axis=0), axis=1)]
     phase = int(np.argmax([nov[k::4].mean() for k in range(4)]))
+    # The bass alone, as a check: a bass that changes most on another beat can mean that guess is a beat off (Perduta's
+    # song: harmony and bass together picked the beat after the bass's changes, so every chord came a beat late). Only a
+    # check, not the choice: there the bass won by 8%, too close to trust on its own, and decoding the chords on each grid
+    # and scoring them against the bass or counting bass note changes didn't separate the two beats either. The melody did
+    # (the report's grid check), but it can't choose alone: the OG P(doom) song's melody leads each change by three beats
+    nb = np.r_[0, np.linalg.norm(np.diff(Bn, axis=0), axis=1)]
+    bn = [float(nb[k::4].mean()) for k in range(4)]
+    if forced_phase is not None: phase = forced_phase % 4
+    bass_phase = int(np.argmax(bn)); bass_margin = round(bn[bass_phase] / max(1e-9, bn[phase]) - 1, 2)   # over the downbeats used
     LB, T, R, P0 = [], [], [], []
     for r in range(12):
         for q, (iv, p) in QUAL.items():
@@ -132,16 +152,52 @@ def chords(st, work, bt, forced_key=None):
         bar = float(b[phase + 4] - b[phase]) if phase + 4 < n else 4 * float(np.median(np.diff(b)))
         if b[phase] - bar > -bar / 2: bars.insert(0, [round(max(0.0, float(b[phase]) - bar), 2), ch[0]])
     end = round(float(b[-1] + np.median(np.diff(b))), 2)
-    out = {"key": key, "bars": bars, "end": end}
+    out = {"key": key, "bars": bars, "end": end, "phase": phase, "bass_phase": bass_phase, "bass_margin": bass_margin}
     f.write_text(json.dumps(out)); return out
+
+
+def evidence(st, ch):
+    # --evidence: what each bar's chord was read from, a row per bar: the decoded chord, then for each half bar the bass
+    # stem's strongest note (in brackets when the bass is nearly silent there) and the backing's three strongest. Use it
+    # to judge a stray chord before changing it in bars.json: a bar whose notes are a cluster (C, C#, D) is a riser or
+    # an effect, not a chord, and a major third over a power chord (G# over E and B) is its overtone, not E major
+    import numpy as np, librosa
+    sr, hop = 22050, 512
+    oth, _ = librosa.load(st / "other.wav", sr=sr); bas, _ = librosa.load(st / "bass.wav", sr=sr)
+    Co = librosa.feature.chroma_cqt(y=oth, sr=sr, hop_length=hop, fmin=librosa.note_to_hz("C3"), n_octaves=4)
+    Cb = librosa.feature.chroma_cqt(y=bas, sr=sr, hop_length=hop, fmin=librosa.note_to_hz("C1"), n_octaves=3)
+    rb = librosa.feature.rms(y=bas, hop_length=hop)[0]; quiet = 0.15 * np.percentile(rb, 95)
+    bars = ch["bars"]
+    log("\nbar   time  chord        bass  backing      | bass  backing")
+    for i, b in enumerate(bars):
+        t0, t1 = b[0], bars[i + 1][0] if i + 1 < len(bars) else ch["end"]; cells = []
+        for a, z in ((t0, (t0 + t1) / 2), ((t0 + t1) / 2, t1)):
+            f = librosa.time_to_frames([a, z], sr=sr, hop_length=hop); f[1] = max(f[0] + 1, f[1])
+            n = NOTES[int(Cb[:, f[0]:f[1]].mean(1).argmax())]
+            n = f"({n})" if rb[f[0]:f[1]].mean() < quiet else f" {n} "
+            cells.append(f"{n:5} {' '.join(NOTES[k] for k in np.argsort(Co[:, f[0]:f[1]].mean(1))[::-1][:3]):12}")
+        log(f"{i:3} {t0:6.1f}  {b[1] + ('/' + b[2] if len(b) > 2 else ''):12} {cells[0]} | {cells[1]}")
 
 
 # ---------- 4. words ----------
 def words(args, st, work):
-    f = work / "asr.json"
+    # One transcript, or two when both --yt and --whisper are given: the captions first, then whisper's, which align()
+    # uses for the words the captions didn't hear (captions often drop a shouted or doubled chorus line whole). Each has
+    # its own cache, asr.json for the captions and asr-whisper.json for whisper, so a later run with other flags never
+    # reads one as the other; with neither flag, whichever are cached are used
+    yt, wh = args.yt or (not args.whisper and (work / "asr.json").exists()), args.whisper or (not args.yt and (work / "asr-whisper.json").exists())
+    if not (yt or wh): sys.exit("words: pass --yt YOUTUBE_ID (word-timed auto-captions), --whisper (needs faster-whisper), or both")
+    got = []
+    if yt: got.append(transcript(args, st, work / "asr.json", "yt"))
+    if wh: got.append(joined(transcript(args, st, work / "asr-whisper.json", "whisper")))
+    return got
+
+
+def transcript(args, st, f, kind):
     if f.exists(): return json.loads(f.read_text())
-    out = []
-    if args.yt:
+    out, work = [], f.parent
+    if kind == "yt":
+        if not args.yt: sys.exit("words: no cached captions; pass --yt YOUTUBE_ID")
         subprocess.run([sys.executable, "-m", "yt_dlp", "--skip-download", "--write-auto-subs", "--sub-langs", "en", "--sub-format", "json3",
                         "-o", str(work / "yt"), f"https://www.youtube.com/watch?v={args.yt}"], check=True)
         got = sorted(work.glob("yt.*.json3"))   # named by the track found: en, en-US, en-orig, …
@@ -151,15 +207,26 @@ def words(args, st, work):
             for s in e.get("segs", []):
                 w = s["utf8"].strip()
                 if w and not w.startswith("["): out.append([round((e["tStartMs"] + s.get("tOffsetMs", 0)) / 1000, 2), w])
-    elif args.whisper:
+    else:
         from faster_whisper import WhisperModel
-        log("words: transcribing the vocals with faster-whisper…")
-        segs, _ = WhisperModel(args.whisper_model, compute_type="int8").transcribe(str(st / "vocals.wav"), word_timestamps=True, language="en")
+        import librosa
+        log("words: transcribing the vocals with faster-whisper (the first run downloads its model)…")
+        v, _ = librosa.load(st / "vocals.wav", sr=16000)   # as samples, not a path: its own file reading breaks with newer PyAV
+        segs, _ = WhisperModel(args.whisper_model, compute_type="int8").transcribe(v, word_timestamps=True, language="en")
         for s in segs:
             for w in s.words or []: out.append([round(w.start, 2), w.word.strip()])
-    else:
-        sys.exit("words: pass --yt YOUTUBE_ID (word-timed auto-captions) or --whisper (needs faster-whisper)")
     f.write_text(json.dumps(out)); return out
+
+
+def joined(asr):
+    # For whisper's transcript only (a caption's leading dash is a speaker change, not a word piece). Whisper splits some
+    # sung words into pieces, the later ones starting with a hyphen ("pee", "-dum" for "P(doom)"): one word to the lyrics,
+    # so join them, or each piece takes a lyric word and every word after slips by one
+    out = []
+    for t, w in asr:
+        if out and w.startswith("-") and len(w) > 1: out[-1] = [out[-1][0], out[-1][1] + w[1:]]
+        else: out.append([t, w])
+    return out
 
 
 # ---------- 5. align ----------
@@ -177,27 +244,47 @@ def read_lyrics(path):
     return secs
 
 
-def align(secs, asr):
-    norm = lambda w: re.sub(r"[^a-z0-9]", "", w.lower().replace("’", "'"))
-    asr = [a for a in asr if not re.search(r"\[\w+\]", a[1])]   # the transcript's [music] and [applause] aren't words
+def norm(w): return re.sub(r"[^a-z0-9]", "", w.lower().replace("’", "'"))
+
+
+def align(secs, asr, more=None):
+    # the transcript's [music] and [applause] aren't words, nor are its speaker marks (">>") and note signs
+    heard = lambda tr: [a for a in tr if norm(a[1]) and not re.search(r"\[\w+\]", a[1])]
     flat = [(si, li, m.start(), m.group()) for si, s in enumerate(secs) for li, l in enumerate(s["lines"]) for m in re.finditer(r"\S+", l)]
-    sm = difflib.SequenceMatcher(None, [norm(w) for *_, w in flat], [norm(w) for _, w in asr], autojunk=False)
-    times = [None] * len(flat)
-    for a, b, n in sm.get_matching_blocks():
-        for k in range(n): times[a + k] = asr[b + k][0]
-    matched = sum(t is not None for t in times)
-    # Words the transcript misheard ("up in my bedroom" for "upping my P(doom)") still have the misheard words' times:
-    # a run of lyrics between matches takes the times of the transcript's words in its place, by syllable position
-    # (each lyric word takes the heard word starting nearest the same share of the run's syllables; a second lyric word
-    # landing on the same heard word, like "thousand" on "100,000", is left for the sung notes)
-    def shares(ws):
-        n = [syllables(w) for w in ws]; tot = sum(n); return [sum(n[:k]) / tot for k in range(len(n))]
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag != "replace": continue
-        heard = shares([w for _, w in asr[j1:j2]]); used = set()
-        for k, f in zip(range(i1, i2), shares([w for *_, w in flat[i1:i2]])):
-            h = min(range(len(heard)), key=lambda x: abs(heard[x] - f))
-            if h not in used: times[k] = asr[j1 + h][0]; used.add(h)
+    # A dash or other mark standing alone ("ten years – all by itself") is drawn with the words but isn't one: it's left
+    # out of the matching and the counts, and sits between the words around it
+    real = [i for i, f in enumerate(flat) if norm(f[3])]
+    times, exact = [None] * len(flat), set()
+    def shares(ws, count=syllables):
+        n = [count(w) for w in ws]; tot = sum(n); return [sum(n[:k]) / tot for k in range(len(n))]
+    def between(i, t):   # only a time that falls between those already known on either side
+        lo = max((times[j] for j in range(i) if times[j] is not None), default=-1e9)
+        hi = min((times[j] for j in range(i + 1, len(times)) if times[j] is not None), default=1e9)
+        return lo < t < hi
+    # Each transcript in turn (the captions, then whisper's if both were given) times the words still without a time:
+    # first the words it heard right, then the ones it misheard ("up in my bedroom" for "upping my P(doom)"), which
+    # still have the misheard words' times: a run of lyrics between matches takes the times of the transcript's words
+    # in its place, by syllable position (each lyric word takes the heard word starting nearest the same share of the
+    # run's syllables; a second lyric word landing on the same heard word, like "thousand" on "100,000", is left for
+    # the sung notes). So a line the captions dropped whole (a shouted chorus hook) comes from the second transcript
+    # captions shout some lines in capitals ("THE SPOKE COMPUTES"), which syllables() would spell out letter by letter
+    said = lambda w: syllables(w.lower() if w.isupper() and re.search(r"[AEIOUY]", w) else w)
+    for tr in [heard(asr)] + ([heard(more)] if more else []):
+        sm = difflib.SequenceMatcher(None, [norm(flat[i][3]) for i in real], [norm(w) for _, w in tr], autojunk=False)
+        for a, b, n in sm.get_matching_blocks():
+            for k in range(n):
+                i = real[a + k]
+                if times[i] is None and between(i, tr[b + k][0]): times[i] = tr[b + k][0]; exact.add(i)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag != "replace": continue
+            # only where about as much was heard as is sung: a few heard words standing in for two lines ("you bottomed
+            # out on a" for a chorus hook and the start of the next line) would squeeze them all into one moment
+            if not 0.6 <= sum(said(w) for _, w in tr[j1:j2]) / sum(syllables(flat[i][3]) for i in real[i1:i2]) <= 1 / 0.6: continue
+            got = shares([w for _, w in tr[j1:j2]], said); used = set()
+            for k, f in zip(real[i1:i2], shares([flat[i][3] for i in real[i1:i2]])):
+                h = min(range(len(got)), key=lambda x: abs(got[x] - f))
+                if h not in used and times[k] is None and between(k, tr[j1 + h][0]): times[k] = tr[j1 + h][0]; used.add(h)
+    matched = len(exact)
     timed = [t is not None for t in times]
     # Words the transcript left out: spread between the nearest timed words on either side, by word count (snap() later
     # moves them onto the sung notes where it can)
@@ -210,12 +297,12 @@ def align(secs, asr):
             elif hi is None: times[i] = times[lo] + 0.3 * (i - lo)
             else: times[i] = times[lo] + (times[hi] - times[lo]) * (i - lo) / (hi - lo)
     for i in range(1, len(times)): times[i] = max(times[i], times[i - 1] + 0.05)
-    per, hits, kset, exact = {}, {}, {}, {i for a, _, n in sm.get_matching_blocks() for i in range(a, a + n)}
+    per, hits, kset = {}, {}, {}
     for i, ((si, li, at, w), t) in enumerate(zip(flat, times)):
         per.setdefault((si, li), []).append((at, w, t))      # (character index, word, start time) per word
-        hits.setdefault((si, li), []).append(i in exact)      # whether each word matched the transcript
-        kset.setdefault((si, li), []).append(timed[i])        # whether the transcript timed it (matched or misheard)
-    return per, hits, matched, len(flat), kset
+        if norm(w): hits.setdefault((si, li), []).append(i in exact)   # whether each word matched the transcript
+        kset.setdefault((si, li), []).append(timed[i] or not norm(w))  # whether the transcript timed it (matched or misheard)
+    return per, hits, matched, len(real), kset
 
 
 def syllables(w):
@@ -260,6 +347,8 @@ def snap(per, timed, mel):
                 for n, x in zip(need, range(i, e)): t[x] = on[pos]; pos += n
                 moved += e - i
         i = e
+    for x, (k, j) in enumerate(words):   # a mark standing alone goes just before the word after it
+        if not norm(per[k][j][1]) and 0 < x < len(words) - 1: t[x] = max(t[x - 1] + 0.05, t[x + 1] - 0.05)
     for x, (k, j) in enumerate(words):
         at, w, _ = per[k][j]; per[k][j] = (at, w, round(t[x], 2))
     return moved
@@ -380,7 +469,7 @@ def easy_capo(chord_list):
     # The capo fret (0 to 7) that turns the most playing time into open shapes a beginner knows
     OPEN = {"C", "D", "Dm", "E", "Em", "G", "A", "Am", "C7", "D7", "E7", "G7", "A7", "B7", "Am7b5", "Em7b5", "Dm7b5", "F"}
     def shift(c, k):
-        m = re.match(r"([A-G][b#]?)(.*)", c); return NOTES[(NOTES.index(m[1]) - k) % 12] + m[2]
+        m = re.match(r"([A-G][b#]?)(.*)", c); return NOTES[(pc(m[1]) - k) % 12] + m[2]
     score = [(sum(shift(c, k) in OPEN for c in chord_list) - (0.5 if k else 0), -k) for k in range(8)]
     return -max(score)[1]
 
@@ -388,9 +477,10 @@ def easy_capo(chord_list):
 def common_loop(bars, starts):
     # The most frequent run of four chords starting where a sung line does (so it reads as a phrase, not a slice across
     # two), for the line under the key. A chord held for several bars counts once, so a song that changes every two
-    # bars reads "Eb, Bb, Cm, Ab", not "Eb, Bb, Bb, Cm"
+    # bars reads "Eb, Bb, Cm, Ab", not "Eb, Bb, Bb, Cm". A line belongs to the bar line nearest its start, so one sung on a
+    # pickup counts from the bar it leads into (Perduta's pickups gave "G#, C#m, A, E" for its C#m, A, E, G# loop)
     seq, runs = [b[1] for b in bars], {}
-    first = sorted({max(0, max((i for i, b in enumerate(bars) if b[0] <= t + 0.6), default=0)) for t in starts})
+    first = sorted({min(range(len(bars)), key=lambda i: abs(bars[i][0] - t)) for t in starts})
     for i in first:
         r = []
         for c in seq[i:]:
@@ -405,7 +495,7 @@ def common_loop(bars, starts):
 
 # Blocks between marker lines, each marker alone on its line in the file's own comment syntax: drop() takes a block out,
 # unwrap() keeps it and takes out just its markers
-MARKS = {".html": "<!-- {} -->", ".md": "<!-- {} -->", ".js": "// <{}>", ".css": "/* <{}> */", ".py": "# <{}>"}
+MARKS = {".html": "<!-- {} -->", ".md": "<!-- {} -->", ".js": "// <{}>", ".css": "/* <{}> */", ".py": "# <{}>", ".swift": "// <{}>"}
 def _line(kind, name): return rf"^[ \t]*{re.escape(MARKS[kind].format(name))}[ \t]*\n"
 def drop(text, kind, name):
     # Markers must alternate open, close: an unclosed block would swallow shared code up to the next block's close
@@ -423,14 +513,15 @@ def cut(text, kind):
 def cut_template(mode):
     # One template for both modes: keep this mode's blocks (site or standalone) and drop the other's
     tpl = (SKILL / "template.html").read_text()
-    return cut(tpl, ".html") if mode == "standalone" else unwrap(drop(tpl, ".html", "standalone"), ".html", "site")
+    if mode == "standalone": return cut(tpl, ".html")
+    return unwrap(drop(tpl, ".html", "standalone"), ".html", "site")
 
 
 def build(args, st, bt, ch, secs, per, hits, mel):
     dest = args.out
     slug = args.slug; dest.mkdir(parents=True, exist_ok=True)
-    bars, end = ch["bars"], ch["end"]
-    key = args.key or ch["key"]
+    k = args.key or ch["key"]; key = spell(k, k)
+    bars, end = [[b[0]] + [spell(c, key) for c in b[1:]] for b in ch["bars"]], ch["end"]
     beats = bt["beats"]
     ev = []
     for i, b in enumerate(bars):
@@ -484,7 +575,7 @@ def build(args, st, bt, ch, secs, per, hits, mel):
                         "-metadata", f"title={args.title} (instrumental)", "-metadata", f"artist={args.artist}", str(dest / media["instrumental"])], check=True)
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(st / "vocals.wav"), "-af", "alimiter=limit=0.95", "-b:a", "128k",
                         "-metadata", f"title={args.title} (vocals)", "-metadata", f"artist={args.artist}", str(dest / media["vocals"])], check=True)
-    song = {"key": key, "capo": capo, "about": common_loop(bars, [ws[0][2] for *_, ws in flat]), **media}
+    song = {"key": key, "capo": capo, "about": args.about if args.about is not None else common_loop(bars, [ws[0][2] for *_, ws in flat]), **media}
     page_name, used_by = "index.html", "Used by karaoke.js"
     js = (f"// Karaoke chords for “{args.title}” ({page_name}, drawn by karaoke.js), made by the chord-page skill from\n"
           f"// the recording: chords read from its stems on a tracked beat grid, line and word times from the transcript\n"
@@ -501,12 +592,15 @@ def build(args, st, bt, ch, secs, per, hits, mel):
         f"window.BARS = {{bpm:{mid:.0f}, end:{end}, bars:[{','.join(json.dumps(b, separators=(', ', ':')) for b in bars)}]}};\n")
     key_name = re.sub(r"^([A-G][b#]?)(m?)$", lambda m: m[1] + (" minor" if m[2] else " major"), key)
     tempo = f"About {mid:.0f} BPM" + (f" (it drifts from {lo:.0f} to {hi:.0f})" if hi - lo >= 2 else "") + ", 4/4"
-    not_ours = "Not"
+    felt = mid
+    if args.half_time:   # the beat tracker counted twice as fast as the song is felt: say so, and keep its finer grid
+        felt = mid / 2; tempo = f"About {felt:.0f} BPM, 4/4 (the chords are counted in double time, {mid:.0f})"
+    not_ours, permission, mode = "Not", args.permission, "standalone"
     fill = {"TITLE": args.title, "ARTIST": args.artist, "SLUG": slug, "KEY_NAME": key_name, "BACK_LINK": "",
-            "TEMPO": tempo, "TEMPO_SHORT": f"about {mid:.0f} BPM", "RELEASED": f", {args.released}" if args.released else "",
+            "TEMPO": tempo, "TEMPO_SHORT": f"about {felt:.0f} BPM", "RELEASED": f", {args.released}" if args.released else "",
             "CREDIT": f"Song, recording and lyrics by {args.artist}." if args.own else
                 not_ours + f" affiliated with {args.artist}. The song, its recording and its "
-                "lyrics belong to their creator" + (args.permission if args.permission is not None else
+                "lyrics belong to their creator" + (permission if permission is not None else
                 (" (the lyrics are shared with their permission)" if args.no_media else " (the recording, vocals and lyrics are shared with their permission)")) + ".",
             "METHOD": ("How these were made: the recording was split into stems to set the vocals and drums aside, and its beats were "
                        "tracked one by one, since songs drift in tempo. Each half bar of the bass and backing was matched to the closest "
@@ -515,15 +609,16 @@ def build(args, st, bt, ch, secs, per, hits, mel):
                        "Play plays these chords on the song’s own timing: Synth is a simple keyboard and bass in whatever key the sheet is in"
                        + ("." if args.no_media else "; Recording is the song with its vocals taken out. Vocals start turned up, so you "
                           "sing along with the original singer; turn them down to sing it yourself."))}
-    tpl = cut_template("standalone" if args.out else "site")
+    tpl = cut_template(mode)
     if args.out:
         # A folder of its own, with the skill's copies of the player and its styles
         for f in ["karaoke.js", "chordpage.css"]: (dest / f).write_text(cut((SKILL / "assets" / f).read_text(), Path(f).suffix))
-    # Everything from the command line is escaped; the tabs and the back link are HTML on purpose
-    raw = {"TOPNAV", "BACK_LINK"}
+    # Everything from the command line is escaped; the tabs, the back link and the script tags are HTML on purpose
+    raw = {"TOPNAV", "BACK_LINK", "NOTES_SCRIPTS"}
     page = re.sub(r"\{\{(\w+)\}\}", lambda m: fill[m[1]] if m[1] in raw else html.escape(fill[m[1]]), tpl)
     (dest / page_name).write_text(page)
     return K, capo, key, mstat
+
 
 
 # ---------- report ----------
@@ -536,18 +631,32 @@ def report(st, ch, K, matched, total, hits, secs, mstat):
     v, sr = librosa.load(st / "vocals.wav", sr=16000)
     f0, vf, vp = librosa.pyin(v, fmin=80, fmax=900, sr=sr, hop_length=320, frame_length=1280)
     t = librosa.times_like(f0, sr=sr, hop_length=320); ok = vf & (vp > 0.6)
-    pc = (np.round(librosa.hz_to_midi(f0[ok])) % 12).astype(int); tt = t[ok]
+    pcs = (np.round(librosa.hz_to_midi(f0[ok])) % 12).astype(int); tt = t[ok]
     bars = ch["bars"]; starts = np.array([b[0] for b in bars])
     def tones(c):
-        m = re.match(r"([A-G][b#]?)(.*)", c); r = NOTES.index(m[1]); return {(r + i) % 12 for i in QUAL.get(m[2], QUAL[""])[0]}
-    hit = []
-    for x, p in zip(tt, pc):
-        i = np.searchsorted(starts, x, side="right") - 1
-        if i < 0: continue
-        b = bars[i]; nxt = bars[i + 1][0] if i + 1 < len(bars) else ch["end"]
-        c = b[2] if len(b) > 2 and x >= (b[0] + nxt) / 2 else b[1]
-        hit.append(p in tones(c))
-    log(f"melody on chord notes: {100 * np.mean(hit):.0f}% (about 65% is typical; one chord held all song scores about 55%)")
+        m = re.match(r"([A-G][b#]?)(.*)", c); r = pc(m[1]); return {(r + i) % 12 for i in QUAL.get(m[2], QUAL[""])[0]}
+    def score(d):   # the share of sung frames on the notes of the chord d seconds later
+        hit = []
+        for x, p in zip(tt, pcs):
+            i = np.searchsorted(starts, x + d, side="right") - 1
+            if i < 0: continue
+            b = bars[i]; nxt = bars[i + 1][0] if i + 1 < len(bars) else ch["end"]
+            c = b[2] if len(b) > 2 and x + d >= (b[0] + nxt) / 2 else b[1]
+            hit.append(p in tones(c))
+        return float(np.mean(hit)) if hit else 0.0
+    now = score(0)
+    log(f"melody on chord notes: {100 * now:.0f}% (about 65% is typical; one chord held all song scores about 55%)")
+    # Grid check: the melody against the chords a beat later and earlier. Clearly better a beat later means the chords
+    # come a beat late (the downbeats should be a beat earlier); a melody that leads its changes can also do this, so
+    # it's a hint to weigh with the bass check, not a verdict
+    phase = ch.get("phase")
+    if phase is not None and len(starts) > 1:
+        beat = float(np.median(np.diff(starts))) / 4
+        for d, to in ((beat, phase - 1), (-beat, phase + 1)):
+            later = score(d)
+            if later - now > 0.04:
+                log(f"grid check: the melody fits better with every chord moved a beat {'earlier' if d > 0 else 'later'} ({100 * later:.0f}%); "
+                    f"if the bass check agrees or the chords sound a beat off, rerun with --phase {to % 4}")
     log_melody(mstat)
 
 
@@ -597,8 +706,13 @@ def main():
     ap.add_argument("--out", "--standalone", dest="out", type=Path, metavar="DIR", help="the folder to write the page into, one song per folder")
     credit = ap.add_mutually_exclusive_group()
     credit.add_argument("--permission", help="the footer's credit, e.g. ' (shared with their permission)'; the default fits --no-media")
-    ap.add_argument("--key"); ap.add_argument("--capo", type=int); ap.add_argument("--no-media", action="store_true")
+    ap.add_argument("--key"); ap.add_argument("--capo", type=int)
+    ap.add_argument("--phase", type=int, choices=range(4), help="which beat (0-3, counting from the first tracked beat) the bars start on, when the guess is a beat off")
+    ap.add_argument("--no-media", action="store_true")
+    ap.add_argument("--about", help="the line under the key, in place of the most common run of chords the script finds")
+    ap.add_argument("--half-time", action="store_true", help="the song is felt at half the tracked tempo (rap, half-time drums): the page says so")
     ap.add_argument("--no-report", action="store_true")
+    ap.add_argument("--evidence", action="store_true", help="also print each bar's bass and backing notes, for checking stray chords")
     credit.add_argument("--own", action="store_true", help="the song is yours: the footer credits you instead of disclaiming the artist")
     args = ap.parse_args()
     if not args.melody_only:
@@ -614,15 +728,19 @@ def main():
     if args.melody_only: return melody_only(args, work)
     st = stems(args, work); log("stems:", st)
     bt = beats(st, work); log(f"beats: {len(bt['beats'])}, tempo {bt['bpm'][1]} BPM (from {bt['bpm'][0]} to {bt['bpm'][2]})")
-    ch = chords(st, work, bt, args.key); log(f"chords: {len(ch['bars'])} bars, key {ch['key']}")
-    asr = words(args, st, work); log(f"words: {len(asr)} from the transcript")
+    ch = chords(st, work, bt, args.key, args.phase); log(f"chords: {len(ch['bars'])} bars, key {ch['key']}, downbeats on beat {ch.get('phase')} of 4")
+    if ch.get("bass_phase") is not None and ch["bass_phase"] != ch["phase"]:
+        log(f"chords: the bass changes most often on beat {ch['bass_phase']} of 4 (by {100 * ch.get('bass_margin', 0):.0f}% over the "
+            f"downbeats); if the report's grid check agrees or the chords sound a beat off, rerun with --phase {ch['bass_phase']}")
+    asr = words(args, st, work); log("words: " + " and ".join(str(len(a)) for a in asr) + " from the transcript" + ("s" if len(asr) > 1 else ""))
     secs = read_lyrics(args.lyrics)
-    per, hits, matched, total, timed = align(secs, asr)
+    per, hits, matched, total, timed = align(secs, *asr)
     mel = melody(st / "vocals.wav", work); log(f"melody: {len(mel)} notes")
     log(f"words: {snap(per, timed, mel)} the transcript left out placed on sung notes")
     K, capo, key, mstat = build(args, st, bt, ch, secs, per, hits, mel)
     if args.out: log(f"built: {args.out}/index.html (key {key}, capo {capo}); serve it with: npx serve {args.out}")
     if not args.no_report: report(st, ch, K, matched, total, hits, secs, mstat)
+    if args.evidence: evidence(st, ch)
 
 
 if __name__ == "__main__":

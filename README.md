@@ -79,13 +79,13 @@ YouTube at …"), or run the script yourself.
 Python 3.12 through [uv](https://docs.astral.sh/uv/), and ffmpeg on your PATH (`brew install ffmpeg` on a Mac):
 
 ```bash
-uv venv ~/.cache/chordpage/venv -p 3.12
-VIRTUAL_ENV=~/.cache/chordpage/venv uv pip install "demucs==4.0.1" "numpy<2" "librosa<0.12" "numba<0.62" soundfile yt-dlp
+uv venv ~/.cache/chordpage/venv -p 3.12 --managed-python
+VIRTUAL_ENV=~/.cache/chordpage/venv uv pip install "demucs==4.0.1" "torch<2.9" "torchaudio<2.9" "numpy<2" "librosa<0.12" "numba<0.62" soundfile "yt-dlp[default]"
 ```
 
 For `--yt`, also install deno (`brew install deno`): yt-dlp uses it for YouTube and warns that working without a
 JavaScript runtime is deprecated. demucs pulls in torch (about 1 GB) and takes a few minutes per song on a laptop CPU. Keep demucs at 4.0.1: 4.1 needs
-`sphn`, which has no wheel for some Macs and fails to build. Keep numpy below 2: on Macs where torch stops at 2.2, demucs fails with "Numpy is not available". For `--whisper`, also `uv pip install faster-whisper`.
+`sphn`, which has no wheel for some Macs and fails to build. Keep numpy below 2: on Macs where torch stops at 2.2, demucs fails with "Numpy is not available". Keep torch and torchaudio below 2.9: from 2.9 torchaudio saves audio only through `torchcodec`, so demucs fails writing its stems. Pass `--yt` and `--whisper` together when you can, so each transcript covers what the other missed. No published lyrics? `scripts/screen_lyrics.py VIDEO.mp4` (macOS) reads the ones a video prints on screen. For `--whisper`, also `uv pip install faster-whisper "av<16"` (PyAV 16 dropped an argument faster-whisper 1.2 passes).
 
 ## Run it yourself
 
