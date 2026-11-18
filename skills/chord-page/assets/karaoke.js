@@ -10,7 +10,10 @@
 // text is an instrumental row.
 (function(){
 const $ = id => document.getElementById(id);
-const NOTES = ["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"];
+const NOTES = ["C","C#","D","Eb","E","F","F#","G","Ab","A","Bb","B"], SHARPS = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+// A root's pitch class, however it's spelled (data may say G# or Ab; SHAPES and the synth use NOTES' names)
+const pcOf = r => ({C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11}[r[0]] + (r[1] === "#") - (r[1] === "b") + 12) % 12;
+const flat = ch => ch.replace(/^([A-G][b#]?)/, r => NOTES[pcOf(r)]);
 // Standard shapes, low E to high e (x = not played); every major and minor chord, so any transpose has a diagram
 const SHAPES = {C:"x32010","C#":"x46664",D:"xx0232",Eb:"x68886",E:"022100",F:"133211","F#":"244322",G:"320003",Ab:"466544",A:"x02220",Bb:"x13331",B:"x24442",
   Cm:"x35543","C#m":"x46654",Dm:"xx0231",Ebm:"x68876",Em:"022000",Fm:"133111","F#m":"244222",Gm:"355333",Abm:"466444",Am:"x02210",Bbm:"x13321",Bm:"x24432",
@@ -22,7 +25,10 @@ NOTES.forEach((n, pc) => { const a = (pc + 3) % 12, d = (pc + 10) % 12;
 const SONG = Object.assign({key: "C", capo: 0, about: "", instrumental: "", vocals: ""}, window.KARAOKE_SONG);
 const KEY = SONG.key, keyName = k => k.replace(/^([A-G][b#]?)(m?)$/, (_, r, m) => r + (m ? " minor" : " major"));
 let shift = 0, capoOn = false, size = 16, timer = null;
-const tr = ch => ch.replace(/^([A-G][b#]?)/, r => NOTES[(NOTES.indexOf(r) + shift + 12) % 12]);
+// Names as song books spell them in the key on screen: sharps in G, D, A, E, B and F# major and in Em, Bm, F#m, C#m and
+// G#m (C#m's V is G#, not Ab), flats elsewhere; up is how far that key is from the recording's (the sheet's shift by default)
+const names = (up = shift) => ((KEY.endsWith("m") ? [4, 11, 6, 1, 8] : [7, 2, 9, 4, 11, 6]).includes(((pcOf(KEY) + up) % 12 + 12) % 12) ? SHARPS : NOTES);
+const tr = ch => ch.replace(/^([A-G][b#]?)/, r => names()[(pcOf(r) + shift) % 12]);
 // Capo view: shapes SONG.capo semitones down (capo 5 turns Gm into Dm), which the capo brings back up. Its own switch, so
 // transposing to the same shapes still sounds in the key it says
 const capo = () => capoOn;
@@ -139,9 +145,9 @@ function easyShape(pc, q){
 const shapeCache = {};
 function shapesFor(name){
   if (name in shapeCache) return shapeCache[name];
-  const m = name.match(/^([A-G][b#]?)(m7b5|m7|m|7)?$/), std = SHAPES[name] && fretsOf(SHAPES[name]);
+  const m = name.match(/^([A-G][b#]?)(m7b5|m7|m|7)?$/), std = SHAPES[flat(name)] && fretsOf(SHAPES[flat(name)]);
   if (!m || !std) return shapeCache[name] = null;
-  const pc = NOTES.indexOf(m[1]), q = m[2] || "", key = std.join();
+  const pc = pcOf(m[1]), q = m[2] || "", key = std.join();
   const forms = BARRE.filter(b => q in b).map(b => { let f = (pc - b.root + 12) % 12 || 12; return b[q].map(x => x < 0 ? -1 : f + x); })
     .filter(s => s.join() !== key).sort((a, b) => Math.min(...a.filter(x => x > 0)) - Math.min(...b.filter(x => x > 0)));
   return shapeCache[name] = {easy: easyShape(pc, q) || std, std, adv: forms[0] || std};
@@ -276,14 +282,16 @@ let melodyOn = true;
 try { melodyOn = localStorage.getItem(MELODY_KEY) !== "0"; } catch {}
 const melOn = () => melodyOn && !!MEL;
 const signed = s => s > 6 ? s - 12 : s;
-const noteName = m => NOTES[(m % 12 + 12) % 12] + (Math.floor(m / 12) - 1);
+// A sung pitch's name, spelled in the key it sounds in (up semitones from the recording's), which in the capo view or
+// with the Recording backing isn't the sheet's
+const noteName = (m, up) => names(up)[(m % 12 + 12) % 12] + (Math.floor(m / 12) - 1);
 // One wrapped piece's row of dashes: the piece runs from character o of its line for len characters
 function melRow(L, o, len){
   const row = document.createElement("span"); row.className = "mel"; row.setAttribute("aria-hidden", "true");
   const y = m => Math.min(1, Math.max(0, (m - MEL.lo) / Math.max(1, MEL.hi - MEL.lo))).toFixed(3);
   for (const n of L.notes) if (n.a < o + len && n.b > o){
     const a = Math.max(n.a, o) - o, w = Math.min(n.b, o + len + 1) - o - a;
-    const d = document.createElement("i"); d.dataset.t = n.t; d.title = noteName(n.m + (capo() ? 0 : signed(shift)));
+    const d = document.createElement("i"); d.dataset.t = n.t; d.title = noteName(n.m + signed(sounding()), sounding());
     d.style.cssText = `--a:${a.toFixed(2)};--n:${w.toFixed(2)};--y:${y(n.m)}`; row.append(d);
   }
   return row;
@@ -350,7 +358,7 @@ function bar(k){
   const [t0, c1, c2] = BARS[k], len = (BARS[k + 1]?.[0] ?? BAR_END) - t0, beat = len / 4;
   for (let b = 0; b < 4; b++){
     const st = t0 + b * beat; if (st < play.from - 0.01) continue;
-    const [, root, q] = (b < 2 || !c2 ? c1 : c2).match(/^([A-G][b#]?)(.*)$/), pc = NOTES.indexOf(root) + sounding(), t = st + play.off;
+    const [, root, q] = (b < 2 || !c2 ? c1 : c2).match(/^([A-G][b#]?)(.*)$/), pc = pcOf(root) + sounding(), t = st + play.off;
     (QUAL[q] || QUAL[""]).forEach(iv => tone(play.out, near(pc + iv, 55), t, beat * 0.95, "triangle", b ? 0.045 : 0.07));
     if (b % 2 === 0) tone(play.out, near(pc, 40), t, beat * 1.8, "sine", 0.32);
   }
@@ -504,7 +512,6 @@ let laneOn = true;
 try { laneOn = localStorage.getItem(LANE_KEY) !== "0"; } catch {}
 const laneShown = () => laneOn && !!MEL;
 // A note name's pitch class, in either spelling (Db or C#)
-const pcOf = r => ({C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11}[r[0]] + (r[1] === "#") - (r[1] === "b") + 12) % 12;
 // Every sung word with its start and end, in song order, for the row under the notes
 const WORDS = [];
 for (const L of LINES) if (L.words) (L.text.match(/\S+/g) || []).forEach((s, k) => WORDS.push({t: L.words[k], e: L.words[k + 1], s}));
@@ -543,7 +550,7 @@ function drawLane(t){
   c.font = `500 10px ${MONO}`;
   for (let m = lo; m <= hi; m++){ const pc = (m % 12 + 12) % 12; if (pc && pc !== home) continue;
     c.globalAlpha = 0.25; c.fillStyle = muted; c.fillRect(0, Math.round(y(m)), W, 1);
-    c.globalAlpha = 0.8; c.textBaseline = y(m) > 12 ? "bottom" : "top"; c.fillText(noteName(m), 2, y(m) + (y(m) > 12 ? -1 : 2)); }
+    c.globalAlpha = 0.8; c.textBaseline = y(m) > 12 ? "bottom" : "top"; c.fillText(noteName(m, up), 2, y(m) + (y(m) > 12 ? -1 : 2)); }
   // The notes: past ones fade, the one being sung (and any the mic heard you hit) in highlighter yellow. A note past the
   // song's range (it spans most notes, not the odd outlier) sits on its edge row, and no bar reaches down into the words
   const N = MEL.notes, bh = Math.max(5, Math.min(10, row * 1.4)), hits = play.hits;
